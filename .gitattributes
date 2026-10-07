@@ -1,0 +1,40 @@
+# ============================================================
+#  换行符策略：仓库内统一用 LF 存储，避免 Windows/Linux 往返时漂移。
+#  core.autocrlf 在 Windows 上默认为 true，若不显式约束，
+#  tools/build_all.sh 会被签出成 CRLF，在 Linux/CI 上直接报
+#  "bad interpreter: /bin/bash^M"。以下规则锁定这类文件的 eol。
+# ============================================================
+
+# 默认：文本文件自动识别并归一化为 LF
+* text=auto
+
+# ---- 必须在类 Unix 环境执行/解释的文件：强制 LF ----
+*.sh        text eol=lf
+*.py        text eol=lf
+Makefile    text eol=lf
+*.mk        text eol=lf
+*.ld        text eol=lf
+*.c         text eol=lf
+*.h         text eol=lf
+*.s         text eol=lf
+*.md        text eol=lf
+.gitignore  text eol=lf
+.gitattributes text eol=lf
+
+# ---- Windows 专用工具链文件：保持 CRLF ----
+*.bat       text eol=crlf
+*.uvprojx   text eol=crlf
+*.uvoptx    text eol=crlf
+*.uvguix.*  text eol=crlf
+
+# ---- 二进制文件：不做任何换行符转换 ----
+*.bin       binary
+*.hex       binary
+*.elf       binary
+*.exe       binary
+*.o         binary
+*.a         binary
+*.crf       binary
+*.png       binary
+*.jpg       binary
+*.pdf       binary

@@ -1,0 +1,56 @@
+# ============================================================
+#  AT32_ODrive .gitignore
+#  只提交源码、工程文件与文档；构建产物与个人 IDE 状态一律忽略。
+# ============================================================
+
+# ---------- GCC / make 构建产物 ----------
+firmware/build/
+firmware/build_keil/
+*.o
+*.d
+*.elf
+*.hex
+*.bin
+*.map
+*.lst
+*.su
+
+# ---------- Keil MDK ----------
+# 个人 GUI 布局与调试器选项，含用户名/本机路径，不要提交
+*.uvguix.*
+*.uvoptx
+*.uvprojx.bak?
+*.bak
+*.dep
+*.crf
+*.axf
+*.htm
+*.build_log.htm
+JLinkLog.txt
+JLinkSettings.ini
+keil_build.log
+
+# ---------- 主机侧测试可执行文件 ----------
+tests/*.exe
+tests/*.out
+tests/*.dSYM/
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+
+# ---------- 第三方/自研硬件设计资料（禁止入库）----------
+# 这里曾放入 AxDrive-L（disnox/AxDr_L）的 EasyEDA 导出网表，属于第三方设计。
+# 该目录下的原理图网表、网表导出的引脚映射等一律不入库，避免公开他人硬件设计。
+# 若要保留本地参考，放在本目录即可，git 会忽略；需要入库的内容请另存到 docs/ 其他位置。
+docs/easyeda/
+*.net
+
+# ---------- 编辑器 / 操作系统 ----------
+.vscode/
+.idea/
+*.swp
+*~
+Thumbs.db
+Desktop.ini
+.DS_Store
