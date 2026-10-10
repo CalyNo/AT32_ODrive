@@ -104,6 +104,16 @@ static usb_sts_type class_init_handler(void *udev)
   /* set out endpoint to receive status */
   usbd_ept_recv(pudev, USBD_CDC_BULK_OUT_EPT, pcdc->g_rx_buff, USBD_CDC_OUT_MAXPACKET_SIZE);
 
+  /* open Fibre vendor IN endpoint */
+  usbd_ept_open(pudev, USBD_FIBRE_BULK_IN_EPT, EPT_BULK_TYPE, USBD_FIBRE_IN_MAXPACKET_SIZE);
+
+  /* open Fibre vendor OUT endpoint */
+  usbd_ept_open(pudev, USBD_FIBRE_BULK_OUT_EPT, EPT_BULK_TYPE, USBD_FIBRE_OUT_MAXPACKET_SIZE);
+
+  /* prime the Fibre OUT endpoint */
+  usbd_ept_recv(pudev, USBD_FIBRE_BULK_OUT_EPT, pcdc->g_fibre_rx_buff,
+                USBD_FIBRE_OUT_MAXPACKET_SIZE);
+
   return status;
 }
 
@@ -125,6 +135,10 @@ static usb_sts_type class_clear_handler(void *udev)
 
   /* close out endpoint */
   usbd_ept_close(pudev, USBD_CDC_BULK_OUT_EPT);
+
+  /* close Fibre vendor endpoints */
+  usbd_ept_close(pudev, USBD_FIBRE_BULK_IN_EPT);
+  usbd_ept_close(pudev, USBD_FIBRE_BULK_OUT_EPT);
 
   return status;
 }
@@ -237,11 +251,16 @@ static usb_sts_type class_in_handler(void *udev, uint8_t ept_num)
   cdc_struct_type *pcdc = (cdc_struct_type *)pudev->class_handler->pdata;
   usb_sts_type status = USB_OK;
 
-  /* ...user code...
-    trans next packet data
-  */
   usbd_flush_tx_fifo(pudev, ept_num);
-  pcdc->g_tx_completed = 1;
+
+  if(ept_num == (USBD_FIBRE_BULK_IN_EPT & 0x7FU))
+  {
+    pcdc->g_fibre_tx_completed = 1;
+  }
+  else
+  {
+    pcdc->g_tx_completed = 1;
+  }
 
   return status;
 }
@@ -257,6 +276,13 @@ static usb_sts_type class_out_handler(void *udev, uint8_t ept_num)
   usb_sts_type status = USB_OK;
   usbd_core_type *pudev = (usbd_core_type *)udev;
   cdc_struct_type *pcdc = (cdc_struct_type *)pudev->class_handler->pdata;
+
+  if(ept_num == (USBD_FIBRE_BULK_OUT_EPT & 0x7FU))
+  {
+    pcdc->g_fibre_rxlen = usbd_get_recv_len(pudev, ept_num);
+    pcdc->g_fibre_rx_completed = 1;
+    return status;
+  }
 
   /* get endpoint receive data length  */
   pcdc->g_rxlen = usbd_get_recv_len(pudev, ept_num);
@@ -326,6 +352,9 @@ static usb_sts_type cdc_struct_init(cdc_struct_type *pcdc)
 {
   pcdc->g_tx_completed = 1;
   pcdc->g_rx_completed = 0;
+  pcdc->g_fibre_tx_completed = 1;
+  pcdc->g_fibre_rx_completed = 0;
+  pcdc->g_fibre_rxlen = 0u;
   pcdc->alt_setting = 0;
   pcdc->linecoding.bitrate = linecoding.bitrate;
   pcdc->linecoding.data = linecoding.data;
@@ -384,6 +413,63 @@ error_status usb_vcp_send_data(void *udev, uint8_t *send_data, uint16_t len)
   {
     status = ERROR;
   }
+  return status;
+}
+
+/**
+  * @brief  usb device Fibre vendor rx data process
+  * @param  udev: to the structure of usbd_core_type
+  * @param  recv_data: receive buffer
+  * @retval receive data len
+  */
+uint16_t usb_vendor_get_rxdata(void *udev, uint8_t *recv_data)
+{
+  uint16_t i_index = 0;
+  uint16_t tmp_len = 0;
+  usbd_core_type *pudev = (usbd_core_type *)udev;
+  cdc_struct_type *pcdc = (cdc_struct_type *)pudev->class_handler->pdata;
+
+  if(pcdc->g_fibre_rx_completed == 0)
+  {
+    return 0;
+  }
+
+  pcdc->g_fibre_rx_completed = 0;
+  tmp_len = pcdc->g_fibre_rxlen;
+  for(i_index = 0; i_index < pcdc->g_fibre_rxlen; i_index ++)
+  {
+    recv_data[i_index] = pcdc->g_fibre_rx_buff[i_index];
+  }
+
+  usbd_ept_recv(pudev, USBD_FIBRE_BULK_OUT_EPT, pcdc->g_fibre_rx_buff,
+                USBD_FIBRE_OUT_MAXPACKET_SIZE);
+
+  return tmp_len;
+}
+
+/**
+  * @brief  usb device Fibre vendor send data
+  * @param  udev: to the structure of usbd_core_type
+  * @param  send_data: send data buffer
+  * @param  len: send length
+  * @retval error status
+  */
+error_status usb_vendor_send_data(void *udev, uint8_t *send_data, uint16_t len)
+{
+  error_status status = SUCCESS;
+  usbd_core_type *pudev = (usbd_core_type *)udev;
+  cdc_struct_type *pcdc = (cdc_struct_type *)pudev->class_handler->pdata;
+
+  if(pcdc->g_fibre_tx_completed)
+  {
+    pcdc->g_fibre_tx_completed = 0;
+    usbd_ept_send(pudev, USBD_FIBRE_BULK_IN_EPT, send_data, len);
+  }
+  else
+  {
+    status = ERROR;
+  }
+
   return status;
 }
 

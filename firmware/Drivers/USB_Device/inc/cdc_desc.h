@@ -53,13 +53,13 @@ extern "C" {
 /**
   * @brief usb vendor id and product id define
   */
-#define USBD_CDC_VENDOR_ID               0x2E3C
-#define USBD_CDC_PRODUCT_ID              0x5740
+#define USBD_CDC_VENDOR_ID               0x1209
+#define USBD_CDC_PRODUCT_ID              0x0D32
 
 /**
   * @brief usb descriptor size define
   */
-#define USBD_CDC_CONFIG_DESC_SIZE        67
+#define USBD_CDC_CONFIG_DESC_SIZE        106
 #define USBD_CDC_SIZ_STRING_LANGID       4
 #define USBD_CDC_SIZ_STRING_SERIAL       0x1A
 

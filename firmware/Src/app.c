@@ -11,6 +11,7 @@
 #include "status_led.h"
 #include "system_time.h"
 #include "uart_comm.h"
+#include "usb_fibre.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -79,6 +80,7 @@ static void app_comm_task(void *context)
   (void)context;
   can_comm_poll();
   uart_comm_poll();
+  usb_fibre_poll();
 }
 
 static void app_calibration_task(void *context)
@@ -111,6 +113,8 @@ void app_init(void)
 
   /* UART first: from here on the boot path can report its progress. */
   uart_comm_init();
+  /* Fibre shares the same USB device instance; initialise after the USB stack. */
+  usb_fibre_init();
 #if (BOOT_TRACE_ENABLE != 0u)
   uart_comm_printf("boot: reset=%s (0x%02X) clock=%s\n",
                    app_reset_cause_text(reset_cause),

@@ -18,4 +18,14 @@ uint32_t crc32_update_byte(uint32_t crc, uint8_t data);
 uint32_t crc32_update(uint32_t crc, const uint8_t *data, uint32_t length);
 uint32_t crc32_compute(const uint8_t *data, uint32_t length);
 
+/*
+ * CRC-16/DNP (non-reflected, MSB-first, polynomial 0x3D65).
+ *
+ * Fibre uses this variant with an initial value of 1 for the endpoint-0 JSON
+ * descriptor (`json_crc`).  crc16_update_byte() is the streaming primitive.
+ */
+
+uint16_t crc16_update_byte(uint16_t crc, uint8_t data);
+uint16_t crc16_update(uint16_t crc, const uint8_t *data, uint32_t length);
+
 #endif /* AT32_ODRIVE_CRC_H */

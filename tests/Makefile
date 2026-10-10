@@ -15,7 +15,7 @@ FW      := ../firmware/Src
 
 TESTS   := test_foc.exe test_pid.exe test_traptraj.exe \
            test_controller.exe test_encoder_pll.exe test_crc.exe \
-           test_led_pattern.exe
+           test_led_pattern.exe test_fibre_packet.exe
 
 .PHONY: all run clean
 
@@ -29,6 +29,7 @@ run: $(TESTS)
 	./test_encoder_pll.exe
 	./test_crc.exe
 	./test_led_pattern.exe
+	./test_fibre_packet.exe
 
 test_foc.exe: test_foc.c $(FW)/foc.c $(FW)/util.c
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
@@ -49,6 +50,9 @@ test_crc.exe: test_crc.c $(FW)/crc.c
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
 test_led_pattern.exe: test_led_pattern.c $(FW)/led_pattern.c
+	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+
+test_fibre_packet.exe: test_fibre_packet.c $(FW)/fibre_server.c $(FW)/crc.c
 	$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
 clean:

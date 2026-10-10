@@ -38,6 +38,9 @@ USER_SOURCES = [
     "led_pattern.c",
     "status_led.c",
     "usb_cdc.c",
+    "usb_fibre.c",
+    "fibre_server.c",
+    "fibre_endpoints.c",
     "ws2812.c",
 ]
 

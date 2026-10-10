@@ -504,6 +504,21 @@
               <FilePath>.\Src\usb_cdc.c</FilePath>
             </File>
             <File>
+              <FileName>usb_fibre.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Src\usb_fibre.c</FilePath>
+            </File>
+            <File>
+              <FileName>fibre_server.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Src\fibre_server.c</FilePath>
+            </File>
+            <File>
+              <FileName>fibre_endpoints.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Src\fibre_endpoints.c</FilePath>
+            </File>
+            <File>
               <FileName>ws2812.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\Src\ws2812.c</FilePath>

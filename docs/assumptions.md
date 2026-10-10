@@ -218,4 +218,30 @@
   1. 能否枚举成 CDC（设备管理器出现串口）；`r usb.connected` 是否为 1；
   2. 双向收发：`r board.core_clock`、`w led.self_test 1`，并观察 `usb.rx_bytes` / `usb.tx_dropped`；
   3. 与 UART3 同时打开时，两边是否都能看到全部回复（广播）。
-- 未实现：ODrive 原生 USB 协议（Fibre/DFU），`odrivetool` 仍不可用。
+- 未实现：DFU；Fibre 0.1 最小端点已接入，见第 16 节。
+
+## 16. ODrive 开源 GUI / Fibre 0.1 最小端点
+
+- 目标：让开源 ODrive GUI（Electron 版）和旧版 `odrivetool` 能通过 USB 发现本板并读写
+  最小状态量。GUI 的 USB 过滤条件是
+  `usb:idVendor=0x1209,idProduct=0x0D32,bInterfaceClass=0,bInterfaceSubClass=1,bInterfaceProtocol=0`。
+- 实现：
+  - USB 复用现有 CDC 复合设备，新增 interface 2：`class=0x00`、`subclass=0x01`、
+    `protocol=0x00`，两个 bulk 端点 `EP3 OUT/EP3 IN`（`Src/cdc_class.c`、
+    `Src/cdc_desc.c`）。
+  - 为兼容开源 GUI，VID/PID **沿用官方 ODrive 的 `0x1209:0x0D32`**；这是有意选择，
+    不代表本板是官方硬件，也不启用官方 DFU/固件升级。
+  - 新增 `Src/usb_fibre.c`（USB bulk 传输层）、`Src/fibre_server.c`（Fibre 0.1 packet
+    解析/响应）、`Src/fibre_endpoints.c`（endpoint 0 JSON + 最小端点表）。
+  - `Src/crc.c` 增加 CRC-16/DNP（poly `0x3D65`，JSON CRC 初值 1），并有主机侧测试。
+- 当前暴露端点：`fw_version_major/minor/revision`、`hw_version_major/minor/variant`、
+  `serial_number`、`vbus_voltage`、`axis0.error`、`axis0.current_state`、
+  `axis0.requested_state`、`axis0.encoder.pos_estimate/vel_estimate`、
+  `axis0.controller.input_pos/input_vel/input_torque`。
+- **待上板验证**：
+  1. Windows 是否枚举出 vendor 接口；若 libusb 打不开，可能仍需按 ODrive v3.6 旧流程
+     给 vendor 接口装 WinUSB/Zadig 驱动。
+  2. 开源 GUI / `odrivetool` 能否读到 endpoint 0 JSON 并列出上述对象。
+  3. `axis0.requested_state = 8` 等写路径与现有安全红线不发生冲突。
+- 未实现：完整 0.5.x 对象树、订阅/示波器、函数端点（`clear_errors()` 等）、DFU。
+- 硬件版本字段目前返回 `0.0.0`，避免被主机误认为 ODrive Pro/S1/Micro。

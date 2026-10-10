@@ -53,12 +53,21 @@ extern "C" {
 #define USBD_CDC_BULK_IN_EPT             0x81
 #define USBD_CDC_BULK_OUT_EPT            0x01
 
+/*
+ * Vendor-specific Fibre endpoint (used by the open-source ODrive GUI).
+ * EP3 OUT/IN are exposed alongside the CDC interfaces.
+ */
+#define USBD_FIBRE_BULK_IN_EPT           0x83
+#define USBD_FIBRE_BULK_OUT_EPT          0x03
+
 /**
   * @brief usb cdc in and out max packet size define
   */
 #define USBD_CDC_IN_MAXPACKET_SIZE        0x40
 #define USBD_CDC_OUT_MAXPACKET_SIZE       0x40
 #define USBD_CDC_CMD_MAXPACKET_SIZE       0x08
+#define USBD_FIBRE_IN_MAXPACKET_SIZE      0x40
+#define USBD_FIBRE_OUT_MAXPACKET_SIZE     0x40
 
 /**
   * @}
@@ -80,6 +89,11 @@ typedef struct
   uint16_t g_len, g_rxlen;
   __IO uint8_t g_tx_completed, g_rx_completed;
   linecoding_type linecoding;
+
+  /* Fibre vendor endpoint state. */
+  uint8_t g_fibre_rx_buff[USBD_FIBRE_OUT_MAXPACKET_SIZE];
+  uint16_t g_fibre_rxlen;
+  __IO uint8_t g_fibre_tx_completed, g_fibre_rx_completed;
 }cdc_struct_type;
 
 
@@ -93,6 +107,10 @@ typedef struct
 extern usbd_class_handler cdc_class_handler;
 uint16_t usb_vcp_get_rxdata(void *udev, uint8_t *recv_data);
 error_status usb_vcp_send_data(void *udev, uint8_t *send_data, uint16_t len);
+
+/* Fibre vendor endpoint accessors used by Src/usb_fibre.c. */
+uint16_t usb_vendor_get_rxdata(void *udev, uint8_t *recv_data);
+error_status usb_vendor_send_data(void *udev, uint8_t *send_data, uint16_t len);
 
 /**
   * @}

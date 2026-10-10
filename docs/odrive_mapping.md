@@ -187,10 +187,8 @@ ss / sr / sc                        保存 / 重启 / 清错误
 ## 5. 与 ODrive 的主要差异
 
 - 没有 ChibiOS/FreeRTOS，使用裸机中断 + 主循环。
-- 没有 Fibre/USB 原生协议；当前使用 CAN Simple + UART ASCII。
-  **odrivetool / ODrive GUI 走 Fibre over USB，无法直接连接本板**；
-  能与本固件共用的上位机是 ODriveArduino 等 ASCII 客户端，以及
-  python-can + 官方 DBC 的 CAN 客户端（见 `tools/odrive_can_smoke.py`）。
+- 已实现最小 Fibre 0.1 USB 端点：USB vendor 接口（class 0/subclass 1/protocol 0）、endpoint 0 JSON、`fw_version_*`、`hw_version_*`、`serial_number`、`vbus_voltage`、`axis0.error/current_state/requested_state` 以及少量编码器/控制器输入端点。开源 ODrive GUI / odrivetool 应能发现并读写这个子集；当前**未实现**完整 0.5.x 对象树、订阅、函数端点与 DFU，且尚未上板验证。
+  其余上位机仍可用 ODriveArduino 等 ASCII 客户端，以及 python-can + 官方 DBC 的 CAN 客户端（见 `tools/odrive_can_smoke.py`）。
 - 控制器量纲做了简化，`input_torque` 近似为 q 轴电流，没有除以力矩常数 `Kt`。
 - 电机 R/L、编码器方向/偏置已实现；力矩常数辨识、增益调度、抗齿槽、无感 FOC、弱磁、MTPA 未实现。
 - 没有制动电阻控制，因为本板硬件没有制动斩波器。

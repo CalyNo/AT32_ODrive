@@ -20,6 +20,16 @@ static void check_u32(const char *name, uint32_t actual, uint32_t expected)
   }
 }
 
+static void check_u16(const char *name, uint16_t actual, uint16_t expected)
+{
+  if (actual != expected)
+  {
+    printf("FAIL %s: actual=0x%04X expected=0x%04X\n",
+           name, (unsigned)actual, (unsigned)expected);
+    g_failures++;
+  }
+}
+
 int main(void)
 {
   static const uint8_t check_data[] = "123456789";
@@ -53,6 +63,19 @@ int main(void)
 
   /* Length changes the result even with identical leading bytes. */
   check_u32("crc32.length_sensitive", crc32_compute(buffer, 9u) != crc32_compute(buffer, 8u), 1u);
+
+  /* CRC-16/DNP seeded with 1, as used for Fibre's endpoint-0 JSON CRC. */
+  check_u16("crc16.check_value", crc16_update(1u, check_data, 9u), 0xB0BCu);
+  check_u16("crc16.empty", crc16_update(1u, NULL, 0u), 0x0001u);
+
+  {
+    uint16_t crc16_streamed = 1u;
+    for (uint32_t i = 0u; i < 9u; i++)
+    {
+      crc16_streamed = crc16_update_byte(crc16_streamed, check_data[i]);
+    }
+    check_u16("crc16.streaming_matches", crc16_streamed, 0xB0BCu);
+  }
 
   if (g_failures == 0)
   {

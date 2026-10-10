@@ -89,9 +89,14 @@ ALIGNED_HEAD static uint8_t g_usbd_descriptor[USB_DEVICE_DESC_LEN] ALIGNED_TAIL 
   USB_DESCIPTOR_TYPE_DEVICE,             /* bDescriptorType */
   0x00,                                  /* bcdUSB */
   0x02,
-  0x02,                                  /* bDeviceClass */
-  0x00,                                  /* bDeviceSubClass */
-  0x00,                                  /* bDeviceProtocol */
+  /*
+   * Composite device: notify the OS that the class is defined per interface
+   * (CDC interfaces plus the Fibre vendor interface).  Using bDeviceClass=0x02
+   * with three interfaces can make Windows fail to configure the device.
+   */
+  0xEF,                                  /* bDeviceClass: miscellaneous/composite */
+  0x02,                                  /* bDeviceSubClass: common class */
+  0x01,                                  /* bDeviceProtocol: interface association descriptor */
   USB_MAX_EP0_SIZE,                      /* bMaxPacketSize */
   LBYTE(USBD_CDC_VENDOR_ID),             /* idVendor */
   HBYTE(USBD_CDC_VENDOR_ID),             /* idVendor */
@@ -117,12 +122,22 @@ ALIGNED_HEAD static uint8_t g_usbd_configuration[USBD_CDC_CONFIG_DESC_SIZE] ALIG
   USB_DESCIPTOR_TYPE_CONFIGURATION,      /* bDescriptorType: configuration */
   LBYTE(USBD_CDC_CONFIG_DESC_SIZE),          /* wTotalLength: bytes returned */
   HBYTE(USBD_CDC_CONFIG_DESC_SIZE),          /* wTotalLength: bytes returned */
-  0x02,                                  /* bNumInterfaces: 2 interface */
+  0x03,                                  /* bNumInterfaces: 3 interfaces (CDC control, CDC data, Fibre vendor) */
   0x01,                                  /* bConfigurationValue: configuration value */
   0x00,                                  /* iConfiguration: index of string descriptor describing
                                             the configuration */
   0xC0,                                  /* bmAttributes: self powered */
   0x32,                                  /* MaxPower 100 mA: this current is used for detecting vbus */
+
+  /* Interface Association Descriptor: CDC virtual COM port (interface 0+1). */
+  0x08,                                  /* bLength: IAD size */
+  0x0B,                                  /* bDescriptorType: interface association */
+  0x00,                                  /* bFirstInterface */
+  0x02,                                  /* bInterfaceCount */
+  0x02,                                  /* bFunctionClass: communications */
+  0x02,                                  /* bFunctionSubClass: abstract control model */
+  0x01,                                  /* bFunctionProtocol: AT commands */
+  0x00,                                  /* iFunction */
 
   USB_DEVICE_IF_DESC_LEN,                /* bLength: interface descriptor size */
   USB_DESCIPTOR_TYPE_INTERFACE,          /* bDescriptorType: interface descriptor type */
@@ -191,6 +206,53 @@ ALIGNED_HEAD static uint8_t g_usbd_configuration[USBD_CDC_CONFIG_DESC_SIZE] ALIG
   LBYTE(USBD_CDC_OUT_MAXPACKET_SIZE),
   HBYTE(USBD_CDC_OUT_MAXPACKET_SIZE),        /* wMaxPacketSize: maximum packe size this endpoint */
   0x00,                                  /* bInterval: interval for polling endpoint for data transfers */
+
+  /*
+   * Interface Association Descriptor: Fibre vendor function (interface 2).
+   * A single-interface function does not strictly need an IAD, but keeping it
+   * mirrors the ODrive v3.x composite descriptor and helps Windows bind the
+   * composite parent device cleanly.
+   */
+  0x08,                                  /* bLength: IAD size */
+  0x0B,                                  /* bDescriptorType: interface association */
+  0x02,                                  /* bFirstInterface */
+  0x01,                                  /* bInterfaceCount */
+  0x00,                                  /* bFunctionClass: vendor specific */
+  0x00,                                  /* bFunctionSubClass */
+  0x00,                                  /* bFunctionProtocol */
+  0x00,                                  /* iFunction */
+
+  /*
+   * Fibre vendor interface: class 0x00, subclass 0x01, protocol 0x00.
+   * This is the interface filter used by the open-source ODrive GUI:
+   * usb:idVendor=0x1209,idProduct=0x0D32,bInterfaceClass=0,
+   * bInterfaceSubClass=1,bInterfaceProtocol=0
+   */
+  USB_DEVICE_IF_DESC_LEN,                /* bLength: interface descriptor size */
+  USB_DESCIPTOR_TYPE_INTERFACE,          /* bDescriptorType: interface descriptor type */
+  0x02,                                  /* bInterfaceNumber: number of interface */
+  0x00,                                  /* bAlternateSetting: alternate set */
+  0x02,                                  /* bNumEndpoints: two bulk endpoints */
+  0x00,                                  /* bInterfaceClass: vendor specific */
+  0x01,                                  /* bInterfaceSubClass: ODrive communication */
+  0x00,                                  /* bInterfaceProtocol */
+  0x00,                                  /* iInterface: index of string descriptor */
+
+  USB_DEVICE_EPT_LEN,                    /* bLength: size of endpoint descriptor in bytes */
+  USB_DESCIPTOR_TYPE_ENDPOINT,           /* bDescriptorType: endpoint descriptor type */
+  USBD_FIBRE_BULK_OUT_EPT,               /* bEndpointAddress: Fibre device RX endpoint */
+  USB_EPT_DESC_BULK,                     /* bmAttributes: endpoint attributes */
+  LBYTE(USBD_FIBRE_OUT_MAXPACKET_SIZE),
+  HBYTE(USBD_FIBRE_OUT_MAXPACKET_SIZE),  /* wMaxPacketSize */
+  0x00,                                  /* bInterval: ignored for bulk */
+
+  USB_DEVICE_EPT_LEN,                    /* bLength: size of endpoint descriptor in bytes */
+  USB_DESCIPTOR_TYPE_ENDPOINT,           /* bDescriptorType: endpoint descriptor type */
+  USBD_FIBRE_BULK_IN_EPT,                /* bEndpointAddress: Fibre device TX endpoint */
+  USB_EPT_DESC_BULK,                     /* bmAttributes: endpoint attributes */
+  LBYTE(USBD_FIBRE_IN_MAXPACKET_SIZE),
+  HBYTE(USBD_FIBRE_IN_MAXPACKET_SIZE),   /* wMaxPacketSize */
+  0x00,                                  /* bInterval: ignored for bulk */
 };
 
 /**

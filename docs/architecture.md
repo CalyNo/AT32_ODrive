@@ -11,6 +11,9 @@
 通信/状态层
   ├─ uart_comm.c              主机链路：ASCII 行协议 + 收发缓冲（UART3/USB 共用）
   ├─ usb_cdc.c                USB FS CDC-ACM 虚拟串口（OTGFS1）
+  ├─ usb_fibre.c              USB vendor 接口传输层（Fibre 0.1 bulk packet）
+  ├─ fibre_server.c           Fibre 0.1 packet 解析/响应 + endpoint 0 JSON
+  ├─ fibre_endpoints.c        最小 Fibre 端点表与 JSON 描述符
   ├─ param.c                  参数表：路径 -> 类型/范围/存储/副作用
   ├─ can_comm.c               CAN Simple 子集
   ├─ status_led.c             状态灯任务（读轴状态 -> 颜色，串口/CAN 可覆盖）
@@ -54,7 +57,7 @@
 | 电流环 | 24kHz | TMR1_CH4 -> ADC 注入完成中断 | 电流采样、Clarke/Park、功率限制、电流 PI、前馈/解耦、SVPWM |
 | 速度/位置环 | 8kHz | TMR2 溢出中断 | 读编码器、电角度、速度/位置控制、状态机和保护 |
 | 系统任务 | 1ms | `scheduler.c` | 喂 IWDG、通信超时看门狗 |
-| 通信任务 | 1ms | `scheduler.c` | UART 解析、CAN 收发、周期心跳/上报 |
+| 通信任务 | 1ms | `scheduler.c` | UART 解析、CAN 收发、USB CDC/Fibre 轮询、周期心跳/上报 |
 | 校准任务 | 1ms | `scheduler.c` | 有校准请求时执行阻塞式 R/L 或编码器偏置校准 |
 | 温度采样 | 100Hz | `scheduler.c`（1ms 任务内分频） | ADC1 规则组软件触发采样 PB0/PB1，更新 `temp_motor`/`temp_mos`，含传感器失效检测 |
 | 状态灯任务 | 100ms | `scheduler.c` | 采样轴状态/错误，状态变化时启动一帧 WS2812B（`ws2812_write` 只登记 DMA，不阻塞） |
@@ -285,7 +288,7 @@ ADC injected: ia, ib, ic, vbus
 
 ## 10. 后续扩展点
 
-- USB CDC / ODrive 原生 USB 协议。
+- Fibre 0.1 端点的完整 0.5.x 对象树、订阅、函数端点和 DFU。
 - CAN Simple / ASCII 协议继续补全。
 - Flash 配置双备份/磨损均衡。
 - 力矩常数辨识、增益调度、抗齿槽、无感 FOC、弱磁、MTPA。

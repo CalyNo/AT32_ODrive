@@ -24,7 +24,7 @@
 仍需继续：
 
 - 力矩常数辨识、增益调度、抗齿槽、无感 FOC、弱磁、MTPA。
-- USB CDC。
+- Fibre 0.1 完整对象树、订阅、函数端点与 DFU。
 - 故障日志深度、参数合法性检查。
 
 ## 决策图例
@@ -126,8 +126,8 @@
 | CAN Simple | 实现 | 0x00-0x1D 与官方 DBC 同名同号；心跳字段布局对齐（含三个 error flag） |
 | CAN 波特率 | 实现 | 默认 250kbps（ODrive 出厂值），`can.config.baud_rate` 可配，重启生效 |
 | USB FS 硬件 | 实现 | PA11/PA12 已引出 |
-| USB CDC | 未实现 | PA11/PA12 仅硬件引出，无 USB 代码；当前用 UART/CAN |
-| ODrive Native USB / Fibre | 后续 | 工作量大，若必须兼容 odrivetool 再做 |
+| USB CDC | 实现 | PA11/PA12 虚拟串口，与 UART 共用 ASCII 协议 |
+| ODrive Native USB / Fibre | 部分实现 | 最小 Fibre 0.1 端点：USB vendor 接口、endpoint 0 JSON、fw/hw/vbus/axis0 基础读写；完整对象树/订阅/DFU 未实现 |
 | I2C 接口 | 后续 | PH2/PH3 可用，但无板上 I2C 器件 |
 | Step/Dir | 后续 | AUX 引脚可扩展，当前不做 |
 | PWM 输入 | 跳过（硬件） | 无专用 RC PWM 输入 |
