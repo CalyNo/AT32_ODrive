@@ -1,14 +1,21 @@
 #include "param.h"
 
+#include "adc.h"
 #include "axis.h"
+#include "board.h"
 #include "config.h"
 #include "nvm_config.h"
+#include "status_led.h"
 #include "uart_comm.h"
+#include "usb_cdc.h"
 #include "util.h"
 
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Owned by the CMSIS device file; published as board.core_clock. */
+extern unsigned int system_core_clock;
 
 /*
  * Sentinel bounds for rows that accept any finite value, matching the
@@ -127,6 +134,45 @@ static void param_on_write_invalidate_encoder_offset(const param_entry_t *entry,
   (void)value;
   g_axis.encoder_offset_valid = false;
   g_odrive_config.encoder.pre_calibrated = 0u;
+}
+
+/*
+ * The status indicator settings are runtime-only (see Inc/status_led.h), so
+ * they have no odrive_config_t field to store into: the row's read pointer
+ * doubles as the storage and this handler writes it.
+ */
+static void param_on_write_led(const param_entry_t *entry, float value)
+{
+  if (entry->read_ptr == &g_status_led_mode)
+  {
+    g_status_led_mode = (uint32_t)value;
+  }
+  else if (entry->read_ptr == &g_status_led_color)
+  {
+    g_status_led_color = (uint32_t)value;
+  }
+  else if (entry->read_ptr == &g_status_led_brightness)
+  {
+    g_status_led_brightness = (uint32_t)value;
+  }
+  else if (entry->read_ptr == &g_status_led_self_test)
+  {
+    g_status_led_self_test = (uint32_t)value;
+  }
+  else
+  {
+    /* Nothing to do: the table row and this handler have drifted apart. */
+  }
+}
+
+/* CAN 120 ohm termination switch (PC13, see board_can_termination_set()). */
+static uint32_t s_can_termination;
+
+static void param_on_write_can_termination(const param_entry_t *entry, float value)
+{
+  (void)entry;
+  s_can_termination = (value != 0.0f) ? 1u : 0u;
+  board_can_termination_set(s_can_termination != 0u);
 }
 
 /* -------------------------------------------------------------------------
@@ -269,6 +315,70 @@ static const param_entry_t s_params[] =
     NULL, 0.0f, 10000.0f, true },
   { "axis0.can.node_id", "axis0.config.can.node_id", PARAM_KIND_U32, 0u, &g_axis.can_node_id,
     &g_odrive_config.comm.can_node_id, NULL, 0.0f, 63.0f, false },
+
+  /* Status indicator (WS2812B on PB2).  mode 0 = follow the axis state,
+   * 1 = constant colour (color, 0xRRGGBB), 2 = off.  brightness is a 0..255
+   * scale factor applied to whichever colour is active.  Runtime-only: see
+   * param_on_write_led(). */
+  { "led.mode", NULL, PARAM_KIND_U32, 0u, &g_status_led_mode, NULL, param_on_write_led,
+    0.0f, 2.0f, true },
+  { "led.color", NULL, PARAM_KIND_U32, 0u, &g_status_led_color, NULL, param_on_write_led,
+    0.0f, 16777215.0f, true },
+  { "led.brightness", NULL, PARAM_KIND_U32, 0u, &g_status_led_brightness, NULL, param_on_write_led,
+    0.0f, 255.0f, true },
+
+  /*
+   * Bring-up diagnostics (see docs/bringup.md).  All read-only except
+   * led.self_test; none of them are persisted.
+   */
+  { "led.self_test", NULL, PARAM_KIND_U32, 0u, &g_status_led_self_test, NULL, param_on_write_led,
+    0.0f, 1.0f, true },
+  { "led.busy", NULL, PARAM_KIND_U32, 0u, &g_status_led_busy, NULL, NULL, 0.0f, 1.0f, true },
+  { "led.frames", NULL, PARAM_KIND_U32, 0u, &g_status_led_frames, NULL, NULL,
+    0.0f, PARAM_UNBOUNDED, true },
+  { "led.frames_done", NULL, PARAM_KIND_U32, 0u, &g_status_led_frames_done, NULL, NULL,
+    0.0f, PARAM_UNBOUNDED, true },
+
+  /* Current sense chain: raw injected samples (12-bit) and the zero-current
+   * offset error measured at boot. */
+  { "adc.current_raw_a", NULL, PARAM_KIND_U16, 0u, &g_adc_current_raw[0], NULL, NULL,
+    0.0f, 4095.0f, true },
+  { "adc.current_raw_b", NULL, PARAM_KIND_U16, 0u, &g_adc_current_raw[1], NULL, NULL,
+    0.0f, 4095.0f, true },
+  { "adc.current_raw_c", NULL, PARAM_KIND_U16, 0u, &g_adc_current_raw[2], NULL, NULL,
+    0.0f, 4095.0f, true },
+  { "adc.current_offset_a", NULL, PARAM_KIND_F32, 5u, &g_adc_current_offset[0], NULL, NULL,
+    -PARAM_UNBOUNDED, PARAM_UNBOUNDED, true },
+  { "adc.current_offset_b", NULL, PARAM_KIND_F32, 5u, &g_adc_current_offset[1], NULL, NULL,
+    -PARAM_UNBOUNDED, PARAM_UNBOUNDED, true },
+  { "adc.current_offset_c", NULL, PARAM_KIND_F32, 5u, &g_adc_current_offset[2], NULL, NULL,
+    -PARAM_UNBOUNDED, PARAM_UNBOUNDED, true },
+
+  /* CAN 120 ohm termination switch, needed when bringing up CAN with a single
+   * host adapter on the bench.  Runtime-only, defaults to off. */
+  { "can.termination", NULL, PARAM_KIND_U32, 0u, &s_can_termination, NULL,
+    param_on_write_can_termination, 0.0f, 1.0f, true },
+
+  /*
+   * Board/clock diagnostics, read-only (see docs/bringup.md).  These are the
+   * two questions every bring-up session starts with: did the watchdog reset
+   * me, and is the 8 MHz oscillator actually being used?
+   */
+  { "board.reset_cause", NULL, PARAM_KIND_U32, 0u, &g_board_reset_cause, NULL, NULL,
+    0.0f, PARAM_UNBOUNDED, true },
+  { "board.clock_degraded", NULL, PARAM_KIND_U32, 0u, &g_board_clock_degraded, NULL, NULL,
+    0.0f, 1.0f, true },
+  { "board.core_clock", NULL, PARAM_KIND_U32, 0u, &system_core_clock, NULL, NULL,
+    0.0f, PARAM_UNBOUNDED, true },
+
+  /* USB CDC virtual COM port (see docs/bringup.md).  connected = 1 once the
+   * host has enumerated and configured the interface. */
+  { "usb.connected", NULL, PARAM_KIND_U32, 0u, &g_usb_cdc_connected, NULL, NULL,
+    0.0f, 1.0f, true },
+  { "usb.rx_bytes", NULL, PARAM_KIND_U32, 0u, &g_usb_cdc_rx_bytes, NULL, NULL,
+    0.0f, PARAM_UNBOUNDED, true },
+  { "usb.tx_dropped", NULL, PARAM_KIND_U32, 0u, &g_usb_cdc_tx_dropped, NULL, NULL,
+    0.0f, PARAM_UNBOUNDED, true },
 };
 
 #define PARAM_COUNT  (sizeof(s_params) / sizeof(s_params[0]))

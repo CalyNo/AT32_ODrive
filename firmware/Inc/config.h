@@ -21,6 +21,9 @@
 /* Poll bound for the blocking SPI byte transfers (MT6816 / external encoder).
  * Keeps a stuck bus from hanging the velocity-loop context. */
 #define BOARD_SPI_TRANSFER_RETRY_LIMIT  (100000u)
+/* Bounded UART TX poll: a mis-configured USART (e.g. TEN cleared, so TDBE never
+ * sets) must not hang the whole firmware inside board_uart_write(). */
+#define BOARD_UART_TX_RETRY_LIMIT       (100000u)
 
 /* Low-side shunt + RS724 difference amplifier:
  * Vout = VREF - (Rf / Rin) * (Vshunt), with Rf = 100k, Rin = 2k.
@@ -77,6 +80,13 @@
 #define PROTECTION_BUS_UNDER_VOLTAGE_V  (7.0f)
 #define PROTECTION_TEMP_MAX_C           (85.0f)
 
+/* Status LED: WS2812B-2020 data line on PB2 (see docs/pinout.md).
+ * 25 % brightness is comfortable on a bench and still easy to read; the mode,
+ * colour and brightness are runtime parameters (led.mode / led.color /
+ * led.brightness). */
+#define STATUS_LED_DEFAULT_BRIGHTNESS   (64u)
+#define STATUS_LED_DEFAULT_COLOR        (0x00FFFFFFu)
+
 /* Communication */
 #define UART_BAUDRATE_DEFAULT           (115200u)
 /* ODrive ships 250 kbit/s as its default CAN bit rate, so the same default is
@@ -85,6 +95,17 @@
  * exactly like ODrive). */
 #define CAN_BAUDRATE_DEFAULT            (250000u)
 #define CAN_NODE_ID_DEFAULT             (0u)
+
+/* Clock startup bounds (see board_clock_config()): the 8 MHz oscillator on PH0
+ * can be absent/unpowered, and the boot must not hang silently waiting for it.
+ * crm_hext_stable_wait() itself spins HEXT_STARTUP_TIMEOUT cycles per call. */
+#define BOARD_HEXT_WAIT_ATTEMPTS        (32u)
+#define BOARD_PLL_WAIT_LOOPS            (2000000u)
+
+/* Bring-up instrumentation: print the reset cause and one line per init stage
+ * on the UART.  Set to 0 to silence the boot path once the board is known
+ * good; the "ready" banner is printed either way. */
+#define BOOT_TRACE_ENABLE               (1u)
 
 /* Firmware version */
 #define FIRMWARE_VERSION_MAJOR          (0u)

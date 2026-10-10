@@ -9,11 +9,13 @@
   └─ system_time.c            SysTick 毫秒/DWT 微秒/周期时间基准
 
 通信/状态层
-  ├─ uart_comm.c              UART ASCII 行协议 + 收发缓冲
+  ├─ uart_comm.c              主机链路：ASCII 行协议 + 收发缓冲（UART3/USB 共用）
+  ├─ usb_cdc.c                USB FS CDC-ACM 虚拟串口（OTGFS1）
   ├─ param.c                  参数表：路径 -> 类型/范围/存储/副作用
   ├─ can_comm.c               CAN Simple 子集
-  ├─ status_led.c             状态灯任务（封装 WS2812）
-  ├─ ws2812.c                 WS2812B 底层驱动
+  ├─ status_led.c             状态灯任务（读轴状态 -> 颜色，串口/CAN 可覆盖）
+  ├─ led_pattern.c            纯逻辑：状态/错误 -> 颜色图案 + WS2812 帧编码
+  ├─ ws2812.c                 WS2812B 驱动（TMR20_CH1 + DMA1_CH1，非阻塞）
   └─ nvm_config.c             Flash 参数持久化 + 配置下发（nvm_config_apply）
 
 轴与控制器层
@@ -55,9 +57,32 @@
 | 通信任务 | 1ms | `scheduler.c` | UART 解析、CAN 收发、周期心跳/上报 |
 | 校准任务 | 1ms | `scheduler.c` | 有校准请求时执行阻塞式 R/L 或编码器偏置校准 |
 | 温度采样 | 100Hz | `scheduler.c`（1ms 任务内分频） | ADC1 规则组软件触发采样 PB0/PB1，更新 `temp_motor`/`temp_mos`，含传感器失效检测 |
-| 状态灯任务 | 100ms | `scheduler.c` | 根据轴状态更新 WS2812B |
+| 状态灯任务 | 100ms | `scheduler.c` | 采样轴状态/错误，状态变化时启动一帧 WS2812B（`ws2812_write` 只登记 DMA，不阻塞） |
 
 `main.c` 只负责 `app_init()` 和 `app_run()`，不再直接调用外设或 WS2812。
+
+### 2.0 启动顺序与 IWDG
+
+`app_init()` 的顺序是刻意的，不要随意把 `board_watchdog_init()` 往前挪：
+
+1. `board_reset_cause_take()` —— 读并清 CRM 复位标志（复位原因要能解释）；
+2. `board_watchdog_feed()` —— 重新装载上一次运行遗留的 IWDG 计数器；
+3. `board_clock_config()` → `board_init()` → `uart_comm_init()`（UART 提前，启动路径才能打点）；
+4. PWM/ADC 初始化与电流零偏校准 → 配置加载（必要时一次性写入 flash）；
+5. `axis_init()` / `nvm_config_apply()` / CAN / 状态灯 / TMR2 / 调度器任务注册；
+6. **最后**才 `board_watchdog_init(200u)` 真正使能 IWDG，随后由 1ms 系统任务喂狗。
+
+原因：IWDG 由 LICK 独立计数，系统复位不会让它停止，一旦使能也无法关闭。若在步骤 4/5 之前
+就使能它，任何一次卡住（等 HEXT/PLL、等 ADC 标志、等 UART TX、flash 擦写）都会在 200ms 后
+变成复位 → 再进 `app_init` → 再卡，永远看不到真正的卡点。详见 `docs/assumptions.md` 第 13 节。
+
+`BOOT_TRACE_ENABLE`（`Inc/config.h`，默认开）会打印复位原因和每个阶段的进展，
+便于用串口定位启动卡点；稳定后置 0。
+
+`board_clock_config()` 中 HEXT/ PLL 的等待都是有界的：8MHz 有源晶振没起来时退到内部 HICK
+（同参数 PLL 仍约 288MHz），并在第一行打印 `clock=DEGRADED(HICK)`。降级运行时功率级被锁死
+（`pwm_enable()` 直接返回、`axis_arm()` 报 `AXIS_ERROR_INVALID_STATE`），因为 PWM 频率、死区、
+ADC 采样点和电流环周期都由系统时钟推导。见 `docs/assumptions.md` 第 7 节。
 
 中断优先级（数值越小优先级越高），唯一来源是 `Inc/irq_priority.h`，本表必须与其保持一致：
 
@@ -67,6 +92,37 @@
 | USART3_IRQn | `IRQ_PRIORITY_COMMUNICATION` | 2 |
 | CAN1_RX0_IRQn | `IRQ_PRIORITY_COMMUNICATION` | 2 |
 | TMR2_GLOBAL_IRQn（速度/位置环） | `IRQ_PRIORITY_CONTROL_LOOP` | 3 |
+| USB 与 UART 是两个独立主机口，协议/参数表完全相同（`uart_comm_write()` 广播到两边） | | |
+| OTGFS1_IRQn（USB FS） | `IRQ_PRIORITY_USB` | 2 |
+| DMA1_Channel1_IRQn（状态灯帧尾） | `IRQ_PRIORITY_STATUS_LED` | 4 |
+
+### 2.1 状态指示（WS2812B-2020 / PB2）
+
+`PB2 = TMR20_CH1`（`GPIO_MUX_2`），TMR20 走 APB2 定时器时钟 288MHz，一个 PWM 周期
+= 1.25µs（ARR=359）；`T0H=100`、`T1H=201` tick。帧由 DMA1_CH1 按"每比特一次传输"送出：
+通道 1 的比较事件把下一位写入 `C1DT` 缓冲寄存器，溢出事件再搬进活动寄存器，因此 CPU
+只在启动帧时写几个寄存器（旧实现用关中断位翻转，每帧会挡住中断约 90µs）。
+`led_pattern.c` 里的 `led_ws2812_encode()` 负责 G-R-B / MSB-first 的帧编码，可主机侧测试。
+
+帧尾（第 25 个 entry）的 DMA 传输完成中断只做三件事：停计数器、关 DMA 通道、清标志。
+即使这个中断被高优先级中断（如 24kHz 电流环）拖后，帧尾槽的 0 也会在下一个溢出事件
+自动搬进活动寄存器，数据线保持低电平直到下一帧，因此 **不会多发出一位**，同时天然满足
+WS2812 的复位/锁存时间。
+
+颜色与图案（`led_pattern.c`，`led.mode = 0` 时的行为）：
+
+| 条件 | 指示 |
+| --- | --- |
+| `error != 0` | 红色闪 N 次后停顿；N = 最低置位错误位序号+1（见 `led_pattern.h` 表） |
+| 校准/启动序列进行中 | 蓝色 400ms 亮 / 400ms 灭 |
+| `CLOSED_LOOP_CONTROL` | 绿色常亮 |
+| 其它（空闲/掉使能） | 蓝色常亮 |
+
+亮度默认 25%（`STATUS_LED_DEFAULT_BRIGHTNESS = 64`），由 `led.brightness` 缩放；
+`led.mode = 1` 时用 `led.color`（0xRRGGBB）常亮，`led.mode = 2` 熄灭。
+这三个设置存在 `g_status_led_*`（`status_led.c`）里，**只作用于运行时**，不进
+`odrive_config_t`、不写 flash：持久化要动 NVM 布局并顶 `NVM_CONFIG_VERSION`，会把已保存的
+电机/编码器校准一起作废（详见 `docs/assumptions.md` 第 12 节）。
 
 ## 3. 电流环数据流
 

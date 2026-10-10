@@ -11,6 +11,9 @@
 
 volatile uint32_t adc_irq_count;
 
+uint16_t g_adc_current_raw[3];
+float g_adc_current_offset[3];
+
 static adc_sample_callback_t s_callback;
 static volatile uint16_t s_raw_current[3];
 static volatile uint16_t s_raw_vbus;
@@ -29,6 +32,11 @@ static void adc_read_preempt_group(void)
   s_raw_current[1] = adc_preempt_conversion_data_get(ADC1, ADC_PREEMPT_CHANNEL_2);
   s_raw_current[2] = adc_preempt_conversion_data_get(ADC1, ADC_PREEMPT_CHANNEL_3);
   s_raw_vbus = adc_preempt_conversion_data_get(ADC1, ADC_PREEMPT_CHANNEL_4);
+
+  /* Diagnostic mirror for adc.current_raw_*; see Inc/adc.h. */
+  g_adc_current_raw[0] = s_raw_current[0];
+  g_adc_current_raw[1] = s_raw_current[1];
+  g_adc_current_raw[2] = s_raw_current[2];
 }
 
 void adc_init(void)
@@ -195,6 +203,9 @@ void adc_calibrate_current_offsets(void)
     float volts = (raw_average / CURRENT_SENSE_ADC_MAX) * CURRENT_SENSE_ADC_VREF_VOLT;
     /* Offset is zero-current output voltage error relative to the ideal VREF. */
     s_current_offset[i] = CURRENT_SENSE_VREF_VOLT - volts;
+    g_adc_current_offset[i] = s_current_offset[i];
+    /* Report the averaged zero-current counts, not the last raw sample. */
+    g_adc_current_raw[i] = (uint16_t)(raw_average + 0.5f);
   }
 }
 

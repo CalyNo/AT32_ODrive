@@ -24,6 +24,7 @@ firmware/build_keil/
 *.dep
 *.crf
 *.axf
+*.scvd
 *.htm
 *.build_log.htm
 JLinkLog.txt

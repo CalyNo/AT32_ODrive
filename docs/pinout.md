@@ -25,7 +25,7 @@
 | 17 | PA7 | SPI1_MOSI | 外置 SPI 编码器 MOSI |
 | 18 | PB0 | TEMP_1 | ADC1_IN8 / 外部温度输入 |
 | 19 | PB1 | TEMP_2 | ADC1_IN9 / 板载 NTC |
-| 20 | PB2 | RGB | WS2812B 数据 |
+| 20 | PB2 | RGB | WS2812B 数据，TMR20_CH1（`GPIO_MUX_2`）+ DMA1_CH1 |
 | 21 | PB10 | USART_TX | USART3_TX，115200 |
 | 22 | PB11 | USART_RX | USART3_RX，115200 |
 | 23 | PH3 | IIC_SDA | I2C/软 I2C 数据，预留 |
@@ -37,8 +37,8 @@
 | 29 | PA8 | PWMA_H | TMR1_CH1 |
 | 30 | PA9 | PWMB_H | TMR1_CH2 |
 | 31 | PA10 | PWMC_H | TMR1_CH3 |
-| 32 | PA11 | USB_DM | USB FS DM |
-| 33 | PA12 | USB_DP | USB FS DP |
+| 32 | PA11 | USB_DM | USB FS DM（OTGFS1，`GPIO_MUX_10`） |
+| 33 | PA12 | USB_DP | USB FS DP（OTGFS1，`GPIO_MUX_10`） |
 | 34 | PA13 | SWDIO | SWD 数据 |
 | 35 | PH2 | IIC_SCL | I2C/软 I2C 时钟，预留 |
 | 36 | VDD | VCC | 3.3V |

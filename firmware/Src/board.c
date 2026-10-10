@@ -6,38 +6,100 @@
 
 extern unsigned int system_core_clock;
 
+/*
+ * Debug-visible boot state (read through the reset_cause / clock_degraded
+ * parameters, see docs/bringup.md):
+ *   g_board_reset_cause     - CRM reset flags captured at boot, cleared after
+ *   g_board_clock_degraded  - 1 when running on the HICK fallback
+ */
+uint32_t g_board_reset_cause;
+
+/* True when the system clock is not the intended HEXT-driven 288 MHz. */
+uint32_t g_board_clock_degraded;
+
+bool board_clock_is_degraded(void)
+{
+  return g_board_clock_degraded != 0u;
+}
+
 void board_clock_config(void)
 {
+  bool hext_ok = false;
+  bool pll_locked = false;
+  bool switched = false;
+  uint32_t i;
+
   crm_reset();
 
   crm_periph_clock_enable(CRM_PWC_PERIPH_CLOCK, TRUE);
   pwc_ldo_output_voltage_set(PWC_LDO_OUTPUT_1V3);
   flash_clock_divider_set(FLASH_CLOCK_DIV_3);
 
-  /* X2 is a 4-pin active oscillator, so PH0 must use HEXT bypass mode. */
+  /*
+   * X2 is a 4-pin active oscillator, so PH0 must use HEXT bypass mode.  The
+   * reference manual requires HEXTBYP to be written while HEXT is disabled,
+   * hence this order (crm_reset() has already cleared HEXTEN).
+   */
   crm_hext_bypass(TRUE);
   crm_clock_source_enable(CRM_CLOCK_SOURCE_HEXT, TRUE);
-  while (crm_hext_stable_wait() == ERROR)
+
+  /*
+   * Bounded HEXT wait.  If the oscillator is missing, unpowered, or its output
+   * enable is not asserted, HEXTSTBL never becomes set.  The unbounded wait
+   * this replaces left the board completely silent (no UART, no LED, no reset),
+   * which is by far the hardest bring-up failure to localise: fall back to the
+   * internal 8 MHz HICK and let the boot report the problem instead.
+   */
+  for (i = 0u; i < BOARD_HEXT_WAIT_ATTEMPTS; i++)
   {
+    if (crm_hext_stable_wait() == SUCCESS)
+    {
+      hext_ok = true;
+      break;
+    }
   }
 
-  /* 8 MHz * 144 / (1 * 4) = 288 MHz. */
-  crm_pll_config(CRM_PLL_SOURCE_HEXT, 144, 1, CRM_PLL_FR_4);
+  /* HEXT and HICK are both 8 MHz, so the same settings give 288 MHz. */
+  crm_pll_config(hext_ok ? CRM_PLL_SOURCE_HEXT : CRM_PLL_SOURCE_HICK,
+                 144u, 1u, CRM_PLL_FR_4);
   crm_clock_source_enable(CRM_CLOCK_SOURCE_PLL, TRUE);
-  while (crm_flag_get(CRM_PLL_STABLE_FLAG) != SET)
+
+  for (i = 0u; i < BOARD_PLL_WAIT_LOOPS; i++)
   {
+    if (crm_flag_get(CRM_PLL_STABLE_FLAG) == SET)
+    {
+      pll_locked = true;
+      break;
+    }
   }
 
   crm_ahb_div_set(CRM_AHB_DIV_1);
   crm_apb2_div_set(CRM_APB2_DIV_2);
   crm_apb1_div_set(CRM_APB1_DIV_2);
 
-  crm_auto_step_mode_enable(TRUE);
-  crm_sysclk_switch(CRM_SCLK_PLL);
-  while (crm_sysclk_switch_status_get() != CRM_SCLK_PLL)
+  if (pll_locked)
   {
+    /* Auto step mode switches glitch-free; the bounded wait keeps a dead PLL
+     * from hanging the boot as well. */
+    crm_auto_step_mode_enable(TRUE);
+    crm_sysclk_switch(CRM_SCLK_PLL);
+    for (i = 0u; i < BOARD_PLL_WAIT_LOOPS; i++)
+    {
+      if (crm_sysclk_switch_status_get() == CRM_SCLK_PLL)
+      {
+        switched = true;
+        break;
+      }
+    }
+    crm_auto_step_mode_enable(FALSE);
   }
-  crm_auto_step_mode_enable(FALSE);
+
+  /*
+   * Degraded means "not the intended HEXT-driven 288 MHz clock".  The HICK is
+   * only ~+-2-3% accurate, so the power stage stays blocked in that case; see
+   * axis_arm() and docs/assumptions.md.
+   */
+  g_board_clock_degraded = (hext_ok && pll_locked && switched) ? 0u : 1u;
 
   system_core_clock_update();
 }
@@ -183,6 +245,45 @@ void board_watchdog_feed(void)
   wdt_counter_reload();
 }
 
+/*
+ * Read and clear the CRM reset-cause flags.  The flags are sticky until RSTFC
+ * is written and are *not* cleared by a system reset, so this has to run before
+ * anything else in app_init to report the reset that led to the current boot.
+ */
+uint32_t board_reset_cause_take(void)
+{
+  uint32_t cause = 0u;
+
+  if (crm_flag_get(CRM_NRST_RESET_FLAG) == SET)
+  {
+    cause |= BOARD_RESET_CAUSE_NRST;
+  }
+  if (crm_flag_get(CRM_POR_RESET_FLAG) == SET)
+  {
+    cause |= BOARD_RESET_CAUSE_POR;
+  }
+  if (crm_flag_get(CRM_SW_RESET_FLAG) == SET)
+  {
+    cause |= BOARD_RESET_CAUSE_SOFTWARE;
+  }
+  if (crm_flag_get(CRM_WDT_RESET_FLAG) == SET)
+  {
+    cause |= BOARD_RESET_CAUSE_WATCHDOG;
+  }
+  if (crm_flag_get(CRM_WWDT_RESET_FLAG) == SET)
+  {
+    cause |= BOARD_RESET_CAUSE_WINDOW_WATCHDOG;
+  }
+  if (crm_flag_get(CRM_LOWPOWER_RESET_FLAG) == SET)
+  {
+    cause |= BOARD_RESET_CAUSE_LOW_POWER;
+  }
+
+  crm_flag_clear(CRM_ALL_RESET_FLAG);
+  g_board_reset_cause = cause;
+  return cause;
+}
+
 void board_can_termination_set(bool enable)
 {
   /*
@@ -284,20 +385,38 @@ float board_temp_raw_to_celsius(uint16_t raw)
 
 void board_uart_write(const uint8_t *data, uint32_t len)
 {
+  uint32_t retry;
+
   if (data == NULL)
   {
     return;
   }
 
+  /*
+   * Both waits are bounded: if the USART is mis-configured (or its APB clock is
+   * off) the TDBE/TDC flags stay clear, and an unbounded poll here would hang
+   * the boot path with no output at all -- the hardest failure to diagnose.
+   * Dropping the rest of the message is the lesser evil.
+   */
   for (uint32_t i = 0; i < len; i++)
   {
+    retry = 0u;
     while (usart_flag_get(USART3, USART_TDBE_FLAG) == RESET)
     {
+      if (++retry > BOARD_UART_TX_RETRY_LIMIT)
+      {
+        return;
+      }
     }
     usart_data_transmit(USART3, data[i]);
   }
 
+  retry = 0u;
   while (usart_flag_get(USART3, USART_TDC_FLAG) == RESET)
   {
+    if (++retry > BOARD_UART_TX_RETRY_LIMIT)
+    {
+      return;
+    }
   }
 }

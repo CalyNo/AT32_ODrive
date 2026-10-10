@@ -25,6 +25,20 @@ void adc_register_sample_callback(adc_sample_callback_t callback);
 
 void adc_calibrate_current_offsets(void);
 
+/*
+ * Bring-up diagnostics, mirrored into the parameter table as
+ * adc.current_raw_a/b/c (last injected-group sample, 12-bit counts) and
+ * adc.current_offset_a/b/c (zero-current offset error measured by
+ * adc_calibrate_current_offsets(), in volts).
+ *
+ * With PWM disabled no injected conversions run, so the raw values are the
+ * zero-current snapshot taken during boot calibration:
+ *   ~2048 counts = 0 A   (2 mOhm shunt * 50 = 0.1 V/A -> 1 A ~ 124 counts)
+ * See docs/bringup.md for the expected ranges.
+ */
+extern uint16_t g_adc_current_raw[3];
+extern float g_adc_current_offset[3];
+
 /* Sample one temperature input through the ordinary group.  Returns false when
  * the conversion did not complete. */
 bool adc_read_temperature_raw(adc_temp_input_t input, uint16_t *raw);

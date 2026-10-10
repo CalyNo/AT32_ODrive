@@ -7,8 +7,8 @@
  * System time base.
  *
  * SysTick provides a 1 ms monotonic tick.  DWT cycle counter provides
- * cycle/microsecond-resolution busy delays for hardware protocols such as
- * WS2812 and MT6816 bit-banging.
+ * cycle/microsecond-resolution busy delays for hardware protocols such as the
+ * MT6816 SPI bit-banging fallback.
  */
 void system_time_init(void);
 uint32_t system_millis(void);

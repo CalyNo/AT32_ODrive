@@ -29,7 +29,7 @@
  *   PA15 SPI3_CS    MT6816
  *   PB0  ADC1_IN8   TEMP_1
  *   PB1  ADC1_IN9   TEMP_2 (on-board NTC)
- *   PB2  GPIO       WS2812B data
+ *   PB2  TMR20_CH1  WS2812B data (GPIO_MUX2)
  *   PB3  SPI3_SCK   MT6816
  *   PB4  SPI3_MISO  MT6816
  *   PB5  SPI3_MOSI  MT6816
@@ -55,9 +55,38 @@ typedef enum
 } board_phase_t;
 
 void board_clock_config(void);
+
+/*
+ * False when the system clock is the intended HEXT (8 MHz active oscillator on
+ * PH0) driven 288 MHz PLL.  When the oscillator does not come up, the clock
+ * falls back to HICK so that the boot can still report the problem; the HICK is
+ * only ~+-2-3% accurate, so the power stage must stay blocked (see axis_arm())
+ * and CAN bit timing would be out of spec.
+ */
+bool board_clock_is_degraded(void);
+
+/* Boot state mirrored into the parameter table for remote debugging:
+ * board.reset_cause (CRM reset flags of this boot) and board.clock_degraded. */
+extern uint32_t g_board_reset_cause;
+extern uint32_t g_board_clock_degraded;
+
 void board_init(void);
 void board_watchdog_init(uint32_t timeout_ms);
 void board_watchdog_feed(void);
+
+/*
+ * Reset cause, read from the CRM reset flags.  A boot loop caused by the IWDG
+ * is only distinguishable from a firmware hang by looking at these flags, so
+ * app_init() takes them before doing anything else.  Reading them clears them
+ * (RSTFC), i.e. they describe the reset that led to the current boot.
+ */
+#define BOARD_RESET_CAUSE_NRST             (1u << 0)
+#define BOARD_RESET_CAUSE_POR              (1u << 1)
+#define BOARD_RESET_CAUSE_SOFTWARE         (1u << 2)
+#define BOARD_RESET_CAUSE_WATCHDOG         (1u << 3)
+#define BOARD_RESET_CAUSE_WINDOW_WATCHDOG  (1u << 4)
+#define BOARD_RESET_CAUSE_LOW_POWER        (1u << 5)
+uint32_t board_reset_cause_take(void);
 
 void board_can_termination_set(bool enable);
 

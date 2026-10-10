@@ -228,6 +228,18 @@ void axis_arm(axis_t *axis)
     return;
   }
 
+  /*
+   * A degraded clock means HEXT did not come up and the system is running on
+   * the internal HICK (~+-2-3%).  The current loop period, the PWM frequency
+   * and therefore the current limits would all be off by that much, so the
+   * power stage stays blocked until the oscillator is fixed.
+   */
+  if (board_clock_is_degraded())
+  {
+    axis_set_error(axis, AXIS_ERROR_INVALID_STATE);
+    return;
+  }
+
   if (!axis_bus_voltage_ok(axis))
   {
     axis_set_error(axis, AXIS_ERROR_DC_BUS_UNDER_VOLTAGE);

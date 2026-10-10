@@ -104,6 +104,19 @@ void pwm_init(void)
 
 void pwm_enable(void)
 {
+  /*
+   * Single gate for the power stage: refuse to switch the bridge on when the
+   * system clock is not the HEXT-driven 288 MHz.  The timer periods (PWM
+   * frequency, dead time, ADC sample point) are all derived from it, and the
+   * HICK fallback is only ~+-2-3% accurate, so the current limits and the
+   * sample timing would be unreliable.  Calibration and closed-loop both go
+   * through here, so this covers every path.
+   */
+  if (board_clock_is_degraded())
+  {
+    return;
+  }
+
   if (s_enabled)
   {
     return;

@@ -13,6 +13,10 @@ echo "== Build firmware =="
 cd "$ROOT/firmware"
 mingw32-make -j"${JOBS:-4}"
 
+echo "== Keil-style full link check (no --gc-sections) =="
+makeargs=(-j"${JOBS:-4}")
+mingw32-make "${makeargs[@]}" check-link
+
 echo "== Build and run host tests =="
 cd "$ROOT/tests"
 mingw32-make run

@@ -35,7 +35,9 @@ USER_SOURCES = [
     "can_comm.c",
     "uart_comm.c",
     "nvm_config.c",
+    "led_pattern.c",
     "status_led.c",
+    "usb_cdc.c",
     "ws2812.c",
 ]
 
@@ -54,6 +56,17 @@ DRIVER_SOURCES = [
     "at32f435_437_exint.c",
     "at32f435_437_debug.c",
     "at32f435_437_wdt.c",
+    "at32f435_437_usb.c",
+]
+
+# USB FS device stack (CDC virtual COM port), mirroring firmware/Makefile.
+USB_SOURCES = [
+    "usb_core.c",
+    "usbd_core.c",
+    "usbd_int.c",
+    "usbd_sdr.c",
+    "cdc_class.c",
+    "cdc_desc.c",
 ]
 
 
@@ -102,7 +115,8 @@ def main() -> None:
         r"<IncludePath>[^<]*</IncludePath>":
             "<IncludePath>.\\Inc;.\\Config;.\\Drivers\\CMSIS\\Core\\Include;"
             ".\\Drivers\\CMSIS\\Device\\AT32F435_437;"
-            ".\\Drivers\\AT32F435_437_Firmware_Library\\inc</IncludePath>",
+            ".\\Drivers\\AT32F435_437_Firmware_Library\\inc;"
+            ".\\Drivers\\USB_Device\\inc</IncludePath>",
         r"<RegisterFilePath>AT32F435ZMT7\$Device\\Include\\at32f435_437\.h\\</RegisterFilePath>":
             "<RegisterFilePath>AT32F435CGT7$Device\\Include\\at32f435_437.h\\</RegisterFilePath>",
         r"<DBRegisterFilePath>AT32F435ZMT7\$Device\\Include\\at32f435_437\.h\\</DBRegisterFilePath>":
@@ -140,9 +154,17 @@ def main() -> None:
         ],
     ))
     groups.append(group(
+        "USB Device",
+        [
+            file_entry(f".\\Drivers\\USB_Device\\src\\{name}", 1)
+            for name in USB_SOURCES
+        ],
+    ))
+    groups.append(group(
         "Config",
         [
             file_entry(".\\Config\\at32f435_437_conf.h", 5),
+            file_entry(".\\Config\\usb_conf.h", 5),
             file_entry(".\\Inc\\config.h", 5),
             file_entry(".\\Inc\\board.h", 5),
             file_entry(".\\Inc\\nvm_config.h", 5),

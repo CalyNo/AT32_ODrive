@@ -36,7 +36,7 @@
           <bCustSvd>0</bCustSvd>
           <UseEnv>0</UseEnv>
           <BinPath></BinPath>
-          <IncludePath>.\Inc;.\Config;.\Drivers\CMSIS\Core\Include;.\Drivers\CMSIS\Device\AT32F435_437;.\Drivers\AT32F435_437_Firmware_Library\inc</IncludePath>
+          <IncludePath>.\Inc;.\Config;.\Drivers\CMSIS\Core\Include;.\Drivers\CMSIS\Device\AT32F435_437;.\Drivers\AT32F435_437_Firmware_Library\inc;.\Drivers\USB_Device\inc</IncludePath>
           <LibPath></LibPath>
           <RegisterFilePath>AT32F435CGT7$Device\Include\at32f435_437.h\</RegisterFilePath>
           <DBRegisterFilePath>AT32F435CGT7$Device\Include\at32f435_437.h\</DBRegisterFilePath>
@@ -339,7 +339,7 @@
               <MiscControls>--diag_suppress=188</MiscControls>
               <Define>AT32F435CGT7,HEXT_VALUE=8000000</Define>
               <Undefine></Undefine>
-              <IncludePath>.\Inc;.\Config;.\Drivers\CMSIS\Core\Include;.\Drivers\CMSIS\Device\AT32F435_437;.\Drivers\AT32F435_437_Firmware_Library\inc</IncludePath>
+              <IncludePath>.\Inc;.\Config;.\Drivers\CMSIS\Core\Include;.\Drivers\CMSIS\Device\AT32F435_437;.\Drivers\AT32F435_437_Firmware_Library\inc;.\Drivers\USB_Device\inc</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -357,7 +357,7 @@
               <MiscControls>--diag_suppress=188</MiscControls>
               <Define></Define>
               <Undefine></Undefine>
-              <IncludePath>.\Inc;.\Config;.\Drivers\CMSIS\Core\Include;.\Drivers\CMSIS\Device\AT32F435_437;.\Drivers\AT32F435_437_Firmware_Library\inc</IncludePath>
+              <IncludePath>.\Inc;.\Config;.\Drivers\CMSIS\Core\Include;.\Drivers\CMSIS\Device\AT32F435_437;.\Drivers\AT32F435_437_Firmware_Library\inc;.\Drivers\USB_Device\inc</IncludePath>
             </VariousControls>
           </Aads>
           <LDads>
@@ -489,9 +489,19 @@
               <FilePath>.\Src\nvm_config.c</FilePath>
             </File>
             <File>
+              <FileName>led_pattern.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Src\led_pattern.c</FilePath>
+            </File>
+            <File>
               <FileName>status_led.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\Src\status_led.c</FilePath>
+            </File>
+            <File>
+              <FileName>usb_cdc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Src\usb_cdc.c</FilePath>
             </File>
             <File>
               <FileName>ws2812.c</FileName>
@@ -593,6 +603,46 @@
               <FileType>1</FileType>
               <FilePath>.\Drivers\AT32F435_437_Firmware_Library\src\at32f435_437_wdt.c</FilePath>
             </File>
+            <File>
+              <FileName>at32f435_437_usb.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Drivers\AT32F435_437_Firmware_Library\src\at32f435_437_usb.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>USB Device</GroupName>
+          <Files>
+            <File>
+              <FileName>usb_core.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Drivers\USB_Device\src\usb_core.c</FilePath>
+            </File>
+            <File>
+              <FileName>usbd_core.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Drivers\USB_Device\src\usbd_core.c</FilePath>
+            </File>
+            <File>
+              <FileName>usbd_int.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Drivers\USB_Device\src\usbd_int.c</FilePath>
+            </File>
+            <File>
+              <FileName>usbd_sdr.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Drivers\USB_Device\src\usbd_sdr.c</FilePath>
+            </File>
+            <File>
+              <FileName>cdc_class.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Drivers\USB_Device\src\cdc_class.c</FilePath>
+            </File>
+            <File>
+              <FileName>cdc_desc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\Drivers\USB_Device\src\cdc_desc.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -602,6 +652,11 @@
               <FileName>at32f435_437_conf.h</FileName>
               <FileType>5</FileType>
               <FilePath>.\Config\at32f435_437_conf.h</FilePath>
+            </File>
+            <File>
+              <FileName>usb_conf.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\Config\usb_conf.h</FilePath>
             </File>
             <File>
               <FileName>config.h</FileName>

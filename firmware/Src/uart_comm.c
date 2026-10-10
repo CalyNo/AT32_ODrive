@@ -4,6 +4,7 @@
 #include "board.h"
 #include "config.h"
 #include "param.h"
+#include "usb_cdc.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -30,6 +31,11 @@ static void uart_rx_push(uint8_t byte)
   }
 }
 
+void uart_comm_feed(uint8_t byte)
+{
+  uart_rx_push(byte);
+}
+
 static bool uart_rx_pop(uint8_t *byte)
 {
   if (s_rx_tail == s_rx_head)
@@ -48,6 +54,16 @@ void uart_comm_init(void)
 
   usart_init(USART3, UART_BAUDRATE_DEFAULT, USART_DATA_8BITS, USART_STOP_1_BIT);
 
+  /*
+   * The transmitter and receiver must be switched on before the peripheral is
+   * enabled (same order as the SDK examples).  Without TEN the TDBE flag never
+   * becomes set, so board_uart_write() polls forever and the board looks
+   * completely dead (no boot trace, no banner, no parameter replies); without
+   * REN the host cannot send anything and the RDBF interrupt never fires.
+   */
+  usart_transmitter_enable(USART3, TRUE);
+  usart_receiver_enable(USART3, TRUE);
+
   usart_interrupt_enable(USART3, USART_RDBF_INT, TRUE);
   nvic_irq_enable(USART3_IRQn, IRQ_PRIORITY_COMMUNICATION, 0);
   usart_enable(USART3, TRUE);
@@ -55,11 +71,16 @@ void uart_comm_init(void)
   s_rx_head = 0u;
   s_rx_tail = 0u;
   s_line_len = 0u;
+
+  /* Second host transport; a no-op when the clock is degraded. */
+  usb_cdc_init();
 }
 
 void uart_comm_write(const uint8_t *data, uint32_t len)
 {
   board_uart_write(data, len);
+  /* Broadcast: a host on either port sees the complete conversation. */
+  usb_cdc_write(data, len);
 }
 
 void uart_comm_printf(const char *fmt, ...)
@@ -441,6 +462,8 @@ static void uart_handle_line(char *line)
 void uart_comm_poll(void)
 {
   uint8_t byte;
+
+  usb_cdc_poll();
 
   while (uart_rx_pop(&byte))
   {

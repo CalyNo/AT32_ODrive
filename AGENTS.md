@@ -52,7 +52,10 @@
 - 新功能先在 `firmware/Inc` 定义接口，再在 `firmware/Src` 实现。
 - 每次改动后必须至少通过：
   1. `cd firmware && mingw32-make -j` 交叉编译通过（0 warning）；
-  2. `cd tests && mingw32-make run` 主机侧算法测试全部通过。
+  2. `cd firmware && mingw32-make check-link` Keil 式全量链接通过（Keil/armcc 不做
+     `--gc-sections`，未被调用的库代码里引用的钩子符号也必须存在，例如
+     `usb_delay_ms`/`usb_usart_config`；GCC 的 `--gc-sections` 会掩盖这类缺失）；
+  3. `cd tests && mingw32-make run` 主机侧算法测试全部通过。
 - 新增/删除 `firmware/Src` 下的源文件时，必须同时更新 `tools/gen_keil_project.py`
   的 `USER_SOURCES` 并重新生成 Keil 工程（`python tools/gen_keil_project.py`），
   否则 Makefile 与 Keil 工程会漂移。

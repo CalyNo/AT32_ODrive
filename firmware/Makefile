@@ -21,7 +21,8 @@ AS_FLAGS      := $(CPU_FLAGS) -x assembler-with-cpp
 INCLUDES      := -IInc -IConfig \
                  -IDrivers/CMSIS/Core/Include \
                  -IDrivers/CMSIS/Device/AT32F435_437 \
-                 -IDrivers/AT32F435_437_Firmware_Library/inc
+                 -IDrivers/AT32F435_437_Firmware_Library/inc \
+                 -IDrivers/USB_Device/inc
 
 LDSCRIPT      := Startup/AT32F435xG_FLASH.ld
 
@@ -44,7 +45,17 @@ DRIVER_SRCS   := \
   Drivers/AT32F435_437_Firmware_Library/src/at32f435_437_debug.c \
   Drivers/AT32F435_437_Firmware_Library/src/at32f435_437_wdt.c
 
-C_SRCS        := $(APP_SRCS) $(DRIVER_SRCS)
+# USB FS device stack for the CDC virtual COM port (Src/usb_cdc.c).
+USB_SRCS      := \
+  Drivers/AT32F435_437_Firmware_Library/src/at32f435_437_usb.c \
+  Drivers/USB_Device/src/usb_core.c \
+  Drivers/USB_Device/src/usbd_core.c \
+  Drivers/USB_Device/src/usbd_int.c \
+  Drivers/USB_Device/src/usbd_sdr.c \
+  Drivers/USB_Device/src/cdc_class.c \
+  Drivers/USB_Device/src/cdc_desc.c
+
+C_SRCS        := $(APP_SRCS) $(DRIVER_SRCS) $(USB_SRCS)
 ASM_SRCS      := Startup/startup_at32f435_437.s
 
 C_OBJS        := $(patsubst %.c,$(BUILD_DIR)/%.o,$(C_SRCS))
@@ -81,6 +92,18 @@ $(ELF): $(OBJS) $(LDSCRIPT)
 
 $(HEX): $(ELF)
 	$(OBJCOPY) -O ihex $< $@
+
+# Keil/armcc links the whole object set (no --gc-sections equivalent by default),
+# so a symbol referenced from a section that GCC would garbage-collect still has
+# to resolve -- the CDC class's usb_delay_ms() hook was exactly that case.
+# This target mirrors the Keil behaviour and fails on any undefined symbol.
+.PHONY: check-link
+check-link: $(OBJS) $(LDSCRIPT)
+	@mkdir -p $(dir $(ELF))
+	$(CC) $(CPU_FLAGS) -T$(LDSCRIPT) -Wl,--no-warn-rwx-segments \
+		--specs=nano.specs --specs=nosys.specs \
+		-u _printf_float \
+		$(OBJS) -o $(BUILD_DIR)/$(TARGET)_fulllink.elf -lm
 
 $(BIN): $(ELF)
 	$(OBJCOPY) -O binary $< $@

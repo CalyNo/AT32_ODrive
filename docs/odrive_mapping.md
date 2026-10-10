@@ -156,6 +156,18 @@ w axis0.controller.config.input_mode <0..8>
 w axis0.config.save_configuration()
 ```
 
+状态指示灯（本板新增属性，ODrive 无对应项）：
+
+```text
+r led.mode / led.color / led.brightness
+w led.mode <0|1|2>          0 = 跟随轴状态（默认），1 = 固定 led.color，2 = 熄灭
+w led.color <0xRRGGBB>      十进制，如 16711680 = 0xFF0000
+w led.brightness <0..255>   默认 64（25%）
+```
+
+这三个是**运行时属性**：`ss` 不保存它们，重启回默认值（避免为了让灯设置掉电保存而改
+NVM 布局、进而作废已保存的电机/编码器校准）。
+
 命令字母（与 ODrive 同名同义）：
 
 ```text

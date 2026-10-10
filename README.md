@@ -16,11 +16,12 @@
 | 电流采样 | 3 路低边 2mΩ 分流 + RS724 差分放大，增益 50，偏置 AVCC/2 |
 | 母线电压 | R1=10k / R8=1k 分压，ADC 满量程约 36.3V |
 | 编码器 | 板载 MT6816CT-STD，SPI3（PA15/PB3/PB4/PB5，SPI mode 3） |
-| 通信 | CAN 默认 250kbps（PB8/PB9，可由 `can.config.baud_rate` 配置）、UART 115200（PB10/PB11）、USB FS（PA11/PA12，预留） |
+| 通信 | CAN 默认 250kbps（PB8/PB9，可由 `can.config.baud_rate` 配置）、UART 115200（PB10/PB11）、USB FS CDC 虚拟串口（PA11/PA12，OTGFS1） |
 | 其它 | 温度 NTC（PB1 / TEMP_2）、温度输入（PB0 / TEMP_1）、WS2812B RGB（PB2） |
 | 控制频率 | PWM 24kHz，电流环 24kHz，速度/位置环 8kHz |
 
-完整的原理图引脚映射见 [`docs/pinout.md`](docs/pinout.md)，硬件与采样推导见 [`docs/hardware.md`](docs/hardware.md)。
+完整的原理图引脚映射见 [`docs/pinout.md`](docs/pinout.md)，硬件与采样推导见 [`docs/hardware.md`](docs/hardware.md)，
+**没接电机时的整板验证步骤见 [`docs/bringup.md`](docs/bringup.md)**（串口、母线/温度、电流零偏、编码器、状态灯、CAN、flash 配置、复位原因，以及 USB 现状）。
 
 ## 目录结构
 
@@ -33,11 +34,12 @@ AT32_ODrive/
 │   ├── hardware.md           电源、电流采样、编码器、保护推导
 │   ├── architecture.md       固件分层、任务调度与实时控制结构
 │   ├── odrive_mapping.md     ODrive 风格接口与本项目对应关系
-│   └── odrive_feature_matrix.md  功能取舍与进度
+│   ├── odrive_feature_matrix.md  功能取舍与进度
+│   └── bringup.md           无电机时的整板验证清单
 ├── firmware/
 │   ├── Makefile              arm-none-eabi-gcc 构建
 │   ├── Config/               AT32F435_437_conf.h 等配置
-│   ├── Drivers/              Artery AT32F435_437 固件库子集
+│   ├── Drivers/              Artery 固件库子集 + USB device 栈（CDC 虚拟串口）
 │   ├── Inc/                  应用、系统、通信、控制、纯算法头文件
 │   ├── Src/                  app/system/param/comm/control/BSP 源码
 │   └── Startup/              启动文件与链接脚本
@@ -171,7 +173,8 @@ python tools/odrive_ascii_smoke.py --port COM3
 - 力矩/速度/位置三种控制模式，输入模式支持直通、速度斜坡、位置滤波、梯形轨迹、力矩斜坡。
 - CAN Simple：命令编号与官方 `odrive-cansimple.dbc` 同名同号，心跳字段布局对齐 ODrive，支持心跳、错误、状态、模式、输入、限制、TrapTraj、Iq、母线电压电流等。
 - UART ASCII：与 ODrive 响应语义一致（`r` 只回数值、`w` 成功静默、结尾 CRLF），命令集 `r`/`w`/`p`/`v`/`c`/`t`/`f`/`u`/`ss`/`sr`/`sc`，由 `param.c` 参数表统一驱动（详见 `docs/architecture.md` 第 8 节）；因此 **ODriveArduino 等现成 ASCII 上位机可直接使用**。
-- WS2812B 状态灯。
+- WS2812B 状态灯（PB2 = TMR20_CH1 + DMA，硬件产生波形、不关中断）：错误红色闪烁码、校准蓝闪、闭环绿、空闲蓝；颜色/模式/亮度可用 `w led.mode|led.color|led.brightness` 或 CAN 改写（运行时属性，重启回默认）。
+- 启动可观测性：`BOOT_TRACE_ENABLE` 打开时串口打印复位原因（POR/NRST/IWDG/软件）与各初始化阶段，IWDG 在 `app_init` 末尾才使能，启动卡点不会被复位循环掩盖。
 
 ## 尚未完成/上板前需要做的事
 
@@ -181,7 +184,7 @@ python tools/odrive_ascii_smoke.py --port COM3
 - 电机参数（极对数、相电阻、相电感、电流环 PI、速度/位置增益）需要按实际电机整定。
 - 校准流程已实现阻塞式 R/L 和编码器偏置/方向，但必须在低电流、限流电源下首次验证。
 - 力矩常数辨识、增益调度、抗齿槽、无感 FOC、弱磁、MTPA 尚未实现。
-- USB CDC / ODrive 原生 USB 协议尚未接入；当前主要使用 UART 与 CAN。
+- USB CDC（虚拟串口）已接入，与 UART 共用同一套 ASCII 协议；ODrive 原生 USB 协议（Fibre/DFU）尚未实现。
 - 示波器/调试数据流、制动电阻、多轴支持未实现。
 - 本板无制动斩波器，回馈能量只能通过限流或外部泄放处理。
 
