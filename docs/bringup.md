@@ -462,6 +462,26 @@ socket.io → `odrive_server.py` → pyfibre → USB → 固件 的完整链路�
 `GUI/src/views/Start.vue` 把它绑在 `$store.state.serverConnected` 上。设备有没有找到
 是另一回事，不体现在这个颜色里 —— 判断设备要看设备列表/属性是否真的有值。
 
+**设备列表靠事件填充，不是靠轮询。** `GUI/src/store.js` 里：socket `connect` 时才发
+`findODrives`；后端只在**真正发现设备的那一刻**才回 `odrive-found`；前端收到它才去
+`getODrives`。所以如果后端手里已经有设备、而 discovery 没有重新回调（比如板子刚烧录
+重新枚举过），刷新页面也不会出现设备 —— 重启后端即可。
+
+**不要让两个后端同时跑。** Werkzeug 设了 `allow_reuse_address`，Windows 下允许第二个
+进程绑同一个端口：启动**不会报错**，两个进程都在监听，连接通常落到先启动的那个（可能
+是已经卡死的那个），而新起的那个看起来"什么都没做"（日志里连 discovery 都没有）。
+更糟的是两个进程会同时驱动同一个 USB 设备，而 libfibre 的通道不是并发安全的，表现是
+`[USB] Transfer on EP 0x83 still in progress` 加上
+`OSError: exception: access violation`，之后设备彻底失联。
+`tools/odrive_gui_backend.py` 现在启动前会探测 5000 端口，已被占用就直接拒绝启动。
+
+同理，**不要同时用浏览器和 `tools/odrive_gui_probe.js` 访问同一个后端**：官方
+`odrive_server.py` 用的是"先检查后赋值"的自旋标志 `inUse`
+（`while globals()['inUse']: time.sleep(0.1)` 然后 `globals()['inUse'] = True`），
+它**不是真锁**，两个 socketio 处理线程可以同时通过检查，于是并发访问同一个 USB 通道，
+触发上面那种损坏。只用一个客户端时是干净的 —— 本工程实测：完整属性树遍历（约 78 个
+端点）没有任何协议告警。
+
 **烧录或复位之后必须重启后端。** 板子重新枚举时，`odrive_server.py` 手里的设备句柄会
 变成悬空的，而它的 discovery 循环**既不会再报一次"找到设备"，也不会报 "lost odrive"**，
 于是表现成：地址栏还是绿的、但设备列表和属性全是空的。`tools/odrive_gui_probe.js`

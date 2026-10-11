@@ -49,6 +49,7 @@ let gotTree = false;
 let asked = 0;
 let done = false;
 let treeRetry = null;
+let sawOdriveFound = false;
 const startedAt = Date.now();
 
 function finish(code, note) {
@@ -61,6 +62,8 @@ function finish(code, note) {
     console.log('  ' + p + ' = ' + (v === undefined ? '<no answer>' : JSON.stringify(v)));
   }
   console.log('');
+  console.log('odrive-found event seen: ' + sawOdriveFound
+    + (sawOdriveFound ? '' : '  <-- the GUI would stay empty without this'));
   if (note) console.log('NOTE: ' + note);
   console.log('RESULT: ' + (code === 0 ? 'GUI BACKEND TALKS TO THE BOARD' : 'FAILED'));
   socket.close();
@@ -92,6 +95,15 @@ function askForTree() {
 
 socket.on('odrives-status', (payload) => {
   console.log('odrives-status: ' + payload);
+});
+
+/* This is the event the GUI actually waits for: store.js dispatches getOdrives
+ * only from an odrive-found callback, and the backend emits it only when a
+ * discovery actually turns up a device.  If it never arrives, the GUI stays
+ * empty no matter how healthy the backend's device handle is. */
+socket.on('odrive-found', () => {
+  sawOdriveFound = true;
+  console.log('odrive-found received (this is what makes the GUI ask for the list)');
 });
 
 socket.on('odrives', (payload) => {

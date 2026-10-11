@@ -39,6 +39,26 @@ def _permissive_run(self, app, *args, **kwargs):
     return _ORIGINAL_RUN(self, app, *args, **kwargs)
 
 
+def _port_already_serving(host, port, timeout=1.5):
+    """True if something is already listening on host:port.
+
+    Werkzeug sets allow_reuse_address, which on Windows lets a second process
+    bind a port that is already in use.  Starting a second backend therefore
+    does not fail loudly -- instead both listen, connections go to one of them
+    (typically the older, possibly wedged one), and the new one looks dead.  It
+    also means two processes can drive the same USB device, which corrupts
+    libfibre's transport.  Refuse to start in that case.
+    """
+    import socket
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(timeout)
+    try:
+        return probe.connect_ex((host, port)) == 0
+    finally:
+        probe.close()
+
+
 def main(argv):
     if len(argv) < 2:
         print(__doc__)
@@ -59,6 +79,13 @@ def main(argv):
     if not os.path.isdir(tools_dir):
         print("no such tools directory: " + tools_dir)
         return 2
+
+    if _port_already_serving("127.0.0.1", 5000):
+        print("port 5000 is ALREADY being served -- refusing to start a second backend.")
+        print("Two backends can both bind it on Windows, and then two processes drive")
+        print("the same USB device, which is what corrupts libfibre. Kill the old one")
+        print("first (look for a python.exe running odrive_server.py / odrive_gui_backend.py).")
+        return 3
 
     # Upstream's own __main__ block inserts each of sys.argv[1:] into sys.path;
     # do the same here so the path is in place before runpy takes over.
