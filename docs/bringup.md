@@ -379,6 +379,79 @@ r usb.tx_dropped    TX 环形缓冲溢出丢字节数（正常应长期为 0）
 ```text
 tools/odrive_ascii_smoke.py    # pyserial：校验 ASCII 响应语义（只回数值、写成功静默等）
 tools/odrive_can_smoke.py      # python-can + cantools：用官方 DBC 解码心跳/编码器/母线
+tools/odrive_gui_backend.py    # 启动官方 GUI 的 Python 后端（见 §13）
+tools/odrive_gui_probe.js      # 用官方 GUI 自己的 socket.io 客户端无头验证这条链路
 ```
 
-两者都是 bring-up 辅助，未在本板上运行过（见 `docs/assumptions.md`）。
+前两者都是 bring-up 辅助，未在本板上运行过（见 `docs/assumptions.md`）；后两者已在真机跑通。
+
+## 12. 枚举宽度陷阱（ARM Compiler 5）
+
+**AC5 默认把枚举压缩成能装下所有枚举值的最小类型。** `axis_state_t` 最大只到
+`AXIS_STATE_ERROR = 15`，所以它在 AC5 下是 **1 字节**（`armcc` 实测
+`sizeof(axis_state_t) == 1`）。GCC 默认给枚举 4 字节，所以这个坑**只在 Keil 构建里出现**，
+主机侧测试和 `arm-none-eabi-gcc` 语法检查都看不见它。
+
+参数表却把 `axis0.current_state` / `axis0.requested_state` 声明为 `PARAM_KIND_I32`，
+`param_load_i32()` 按 4 字节读取，于是**把相邻字段一起读了进来**。真机 + 官方 GUI 后端实测：
+
+| 属性 | 读回值 | 解释 |
+| --- | --- | --- |
+| `axis0.requested_state` | **257**（`0x00000101`） | 低字节 `1` = IDLE（正确）；第 2 字节 `1` 是被顺手读进来的 `current_state`；高 2 字节是 `last_state` / `error` 的低位 |
+| `axis0.current_state` | 1 | **只是碰巧对**：紧随其后的 `last_state` / `error` 当时恰好都是 0。只要状态切换过一次（`last_state != 0`）或者 `error != 0`，读回值立刻变成垃圾 |
+
+Fibre / UART ASCII / CAN 三路都走 `param_read_entry()`，所以这一个 bug 对三者同时生效。
+它**不会报任何错**，只会安静地显示一个错数字 —— 这正是它能活到上板阶段才被发现的原因。
+
+修法（`firmware/Inc/axis.h`）：加一个只为占位而存在的枚举值
+`AXIS_STATE_FORCE_32BIT = 0x7FFFFFFF`，把枚举钉死在 32 位，再配一条 C89 风格的静态断言
+（负数组下标，`_Static_assert` 在 AC5 的 C99 模式下没有）：
+
+```c
+typedef char axis_state_t_must_be_32_bits[(sizeof(axis_state_t) == 4) ? 1 : -1];
+```
+
+宽度再被改回去就直接编译失败。副作用：`axis_t` 里 3 个状态字段各由 1 字节变 4 字节，
+`ZI-data` 5268 → 5276（+8），`Code` 58972。
+
+**同类风险**：`axis_error_t` 的最高位是 `1u << 12`，在 AC5 下是 **2 字节**。目前没有任何
+参数行指向 `axis_error_t` **变量**（`axis0.error` 指向的是 `uint32_t error` 字段，三个
+`*.error` 组件行是 `on_read` 计算值、`read_ptr` 为 `NULL`），所以没有实际错配。
+以后新增参数行时必须保证「存储宽度 == `PARAM_KIND_*` 的宽度」；
+`led_pattern.h` 用 `int32_t state` 存轴状态就是为了避开这一点。
+
+## 13. 官方 ODrive GUI（真机已验证）
+
+GUI 的 `GUI/src` 只用 socket.io，**没有 WebUSB 通路**（`fibre-js` 没接进去），所以必须同时
+跑 Python 后端；只在浏览器里打开 `dist` 是连不上设备的。
+
+```text
+# 1) 后端，监听 0.0.0.0:5000
+python tools/odrive_gui_backend.py <ODrive 克隆>/GUI/server/odrive_server.py
+# 2) 前端，静态托管已构建的 dist
+python -m http.server 8080 --directory <ODrive 克隆>/GUI/dist
+# 3) 浏览器打开 http://127.0.0.1:8080
+```
+
+`tools/odrive_gui_backend.py` 只从外部把上游那个文件跑起来，不改上游代码，因为有两个
+环境问题不属于本工程：
+
+- `fibre.utils.Logger.__init__` 在 Windows 上**无条件**使用 `win32console`，而导入它的
+  那一行写在 `try/except ImportError` 里 —— 缺 `pywin32` 就直接 `NameError`。装 `pywin32`。
+- `socketio.run()` 默认 `allow_unsafe_werkzeug=False`，Werkzeug 3.x 下会抛错；
+  该脚本给 `SocketIO.run` 打个补丁把这个参数传进去。
+
+**前后端协议版本必须配对**：GUI 用的是 `socket.io-client 3.0.4`（Engine.IO **v4**），
+服务端要 `flask-socketio 5.x` + `python-engineio 4.x`。装成 flask-socketio 4.x
+（Engine.IO v3）的表现是握手直接失败。
+
+已验证（真机 + 官方客户端）：后端发现设备 → 返回完整属性树（顶层成员
+`fw_version_major … usb`）→ 逐条读属性成功。复现命令：
+
+```text
+node tools/odrive_gui_probe.js
+```
+
+它加载 GUI 自带的 `socket.io-client`（浏览器里跑的就是同一份），走
+socket.io → `odrive_server.py` → pyfibre → USB → 固件 的完整链路。
+
