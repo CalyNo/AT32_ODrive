@@ -288,7 +288,9 @@ ADC injected: ia, ib, ic, vbus
 
 ## 10. 后续扩展点
 
-- Fibre 0.1 端点的完整 0.5.x 对象树、订阅、函数端点和 DFU。
+- Fibre 0.1 端点：对象树（69 行参数）与零参数函数端点**已由 `param.c` 生成**，
+  见 `docs/odrive_mapping.md` §5 与 `tools/gen_fibre_endpoints.py`；
+  仍缺订阅、DFU 与复合类型端点（`system_stats`/`oscilloscope` 等）。
 - CAN Simple / ASCII 协议继续补全。
 - Flash 配置双备份/磨损均衡。
 - 力矩常数辨识、增益调度、抗齿槽、无感 FOC、弱磁、MTPA。
