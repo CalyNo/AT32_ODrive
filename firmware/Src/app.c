@@ -33,7 +33,10 @@
  *
  * The order below therefore is:
  *   1. read the reset cause, so a loop can actually be explained;
- *   2. feed the dog once, to re-arm a counter left running by a previous run;
+ *   2. feed the dog after every init step, to keep a counter left running by a
+ *      previous run alive across the whole init -- one feed at the top is not
+ *      enough, because app_init() takes longer than the 200 ms budget that
+ *      board_watchdog_init() armed at the end of the previous boot;
  *   3. bring up the UART early, so the boot path can report where it stops;
  *   4. only *enable* the IWDG at the very end, once the init work that can
  *      block is done.  A hang before that point stays a hang and is visible in
@@ -270,6 +273,21 @@ void app_init(void)
   board_clock_config();
   nvic_priority_group_config(NVIC_PRIORITY_GROUP_4);
   system_time_init();
+  /*
+   * Feed after every init step.  The IWDG keeps counting across a system reset
+   * (only a power-on reset stops it, see the note above app_init), so after a
+   * warm reset the watchdog is already running with the 200 ms budget armed at
+   * the end of the previous boot -- and app_init() does not fit in 200 ms.  A
+   * single feed at the top was therefore enough after a power cycle but left
+   * the board in a ~200 ms reset loop after any reset that was not a POR:
+   * USB came up (so Windows saw the device), the IWDG fired during the ADC
+   * calibration, and the device kept appearing and disappearing.
+   *
+   * Feeding is a no-op when the watchdog has not been armed yet, so after a
+   * power-on reset a hang before board_watchdog_init() still stays a hang and
+   * is visible in a debugger, exactly as intended.
+   */
+  board_watchdog_feed();
 #if (BOOT_MARKER_ENABLE != 0u)
   /*
    * Earliest useful checkpoint: the WS2812 bit timing is derived from the
@@ -281,18 +299,21 @@ void app_init(void)
 #endif
 
   board_init();
+  board_watchdog_feed();
 #if (BOOT_MARKER_ENABLE != 0u)
   app_boot_marker(2u);
 #endif
 
   /* UART first: from here on the boot path can report its progress. */
   uart_comm_init();
+  board_watchdog_feed();
 #if (BOOT_MARKER_ENABLE != 0u)
   /* uart_comm_init() is where usb_cdc_init() runs. */
   app_boot_marker(3u);
 #endif
   /* Fibre shares the same USB device instance; initialise after the USB stack. */
   usb_fibre_init();
+  board_watchdog_feed();
 #if (BOOT_MARKER_ENABLE != 0u)
   app_boot_marker(4u);
 #endif
@@ -307,6 +328,7 @@ void app_init(void)
 
   pwm_init();
   adc_init();
+  board_watchdog_feed();
   adc_calibrate_current_offsets();
 #if (BOOT_MARKER_ENABLE != 0u)
   app_boot_marker(5u);
@@ -322,6 +344,8 @@ void app_init(void)
     nvm_config_defaults(&g_odrive_config);
     (void)nvm_config_save(&g_odrive_config);
   }
+  /* A sector erase plus the word programming is the longest step in the boot. */
+  board_watchdog_feed();
 #if (BOOT_MARKER_ENABLE != 0u)
   app_boot_marker(6u);
 #endif
@@ -338,8 +362,10 @@ void app_init(void)
 
   adc_register_sample_callback(axis_current_loop_callback);
   adc_start();
+  board_watchdog_feed();
 
   can_comm_init();
+  board_watchdog_feed();
 #if (BOOT_MARKER_ENABLE != 0u)
   /* Last checkpoint: status_led_init() takes the LED over from here on. */
   app_boot_marker(8u);
@@ -349,6 +375,7 @@ void app_init(void)
   axis_timer_init();
 
   scheduler_init();
+  board_watchdog_feed();
   (void)scheduler_add_task(app_system_task, NULL, 1u);
   (void)scheduler_add_task(app_comm_task, NULL, 1u);
   (void)scheduler_add_task(app_calibration_task, NULL, 1u);

@@ -89,14 +89,17 @@ void adc_init(void)
   adc_enable(ADC1, TRUE);
   while (adc_flag_get(ADC1, ADC_RDY_FLAG) == RESET)
   {
+    board_watchdog_feed();
   }
   adc_calibration_init(ADC1);
   while (adc_calibration_init_status_get(ADC1))
   {
+    board_watchdog_feed();
   }
   adc_calibration_start(ADC1);
   while (adc_calibration_status_get(ADC1))
   {
+    board_watchdog_feed();
   }
 
   s_current_scale = CURRENT_SENSE_GAIN * CURRENT_SENSE_SHUNT_OHM;
@@ -186,6 +189,12 @@ void adc_calibrate_current_offsets(void)
     adc_preempt_software_trigger_enable(ADC1, TRUE);
     while (adc_flag_get(ADC1, ADC_PCCE_FLAG) == RESET)
     {
+      /* 256 software triggered conversions run before the scheduler exists, so
+       * keep the independent watchdog alive across them: app_init() only feeds
+       * it once at the top and the IWDG survives a system reset, so a slow
+       * calibration would otherwise reset the chip mid-boot -- which looks like
+       * "the board only comes up after a power cycle". */
+      board_watchdog_feed();
     }
     adc_read_preempt_group();
     accum[0] += s_raw_current[0];
