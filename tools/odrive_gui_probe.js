@@ -18,9 +18,14 @@
  */
 
 const path = require('path');
+const fs = require('fs');
 
 const guiRoot = process.argv[2] || path.join(__dirname, '..', '..', 'ODrive', 'GUI');
 const serverUrl = process.argv[3] || 'http://127.0.0.1:5000';
+/* Optional: write the raw 'odrives' payload here.  That payload is what the
+ * GUI's store transforms, so having it on disk makes frontend bugs reproducible
+ * without a browser. */
+const dumpPath = process.argv[4] || process.env.ODRIVE_TREE_DUMP || null;
 
 let io;
 try {

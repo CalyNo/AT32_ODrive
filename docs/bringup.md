@@ -464,8 +464,22 @@ socket.io → `odrive_server.py` → pyfibre → USB → 固件 的完整链路�
 
 **设备列表靠事件填充，不是靠轮询。** `GUI/src/store.js` 里：socket `connect` 时才发
 `findODrives`；后端只在**真正发现设备的那一刻**才回 `odrive-found`；前端收到它才去
-`getODrives`。所以如果后端手里已经有设备、而 discovery 没有重新回调（比如板子刚烧录
-重新枚举过），刷新页面也不会出现设备 —— 重启后端即可。
+`getODrives`。收到 `odrives` 之后，页脚由 `axes`（`getAxes` 从 `odrives` 派生）渲染出
+轴卡片 —— **Start 页本身没有任何设备列表**，设备的体现就是页脚的轴卡片，以及
+Menu → Import/Export ODrive config 里的设备按钮。别在 Start 页等一个列表。
+
+**上游的 `findODrives` 每个进程只能成功一次**（这是"web 端始终没有设备"的真正原因）。
+它的处理器直接调 `start_discovery()`，而后者每次都 `fibre.Domain(...)` 新建并
+`__enter__()` 一个域、**从不释放**上一个：第一次能发现设备（日志 `Found <serial>`），
+之后每次只打印 `starting disco loop...` 却找不到任何东西，因为设备已被同一个进程占住。
+上游只在 electron 里连一次并保持连接，所以永远碰不到这个路径；但浏览器每刷新一次页面
+都会重新发 `findODrives`，而 `odrive-found` 不会再来，页面就永远空着。
+
+`tools/odrive_gui_backend.py` 已经把这个修掉了：以模块方式加载上游文件并重新注册
+`findODrives` 处理器 —— **已经认识的设备直接重播 `odrives-status` + `odrive-found`**，
+只有手里什么都没有时才真正去 discovery。所以刷新页面现在每次都能拿到设备。
+（判断依据：日志里第二次调用打印的是 `findODrives: re-announcing known odrive(s)`，
+而不是又一次 `starting disco loop...`。）
 
 **不要让两个后端同时跑。** Werkzeug 设了 `allow_reuse_address`，Windows 下允许第二个
 进程绑同一个端口：启动**不会报错**，两个进程都在监听，连接通常落到先启动的那个（可能
