@@ -64,6 +64,33 @@ static uint32_t param_load_u16(const void *ptr)
 }
 
 /* -------------------------------------------------------------------------
+ * Computed values
+ *
+ * Rows with an on_read hook have no storage of their own: the component error
+ * properties are masked views of g_axis.error, exactly the grouping CAN Simple
+ * already reports (see AXIS_ERROR_MASK_* in Inc/axis.h).  The masks are at most
+ * a few thousand, so the float round trip is exact.
+ * ------------------------------------------------------------------------- */
+
+static float param_on_read_motor_error(const param_entry_t *entry)
+{
+  (void)entry;
+  return (float)(g_axis.error & (uint32_t)AXIS_ERROR_MASK_MOTOR);
+}
+
+static float param_on_read_encoder_error(const param_entry_t *entry)
+{
+  (void)entry;
+  return (float)(g_axis.error & (uint32_t)AXIS_ERROR_MASK_ENCODER);
+}
+
+static float param_on_read_controller_error(const param_entry_t *entry)
+{
+  (void)entry;
+  return (float)(g_axis.error & (uint32_t)AXIS_ERROR_MASK_CONTROLLER);
+}
+
+/* -------------------------------------------------------------------------
  * Extra write handling
  * ------------------------------------------------------------------------- */
 
@@ -77,6 +104,37 @@ static void param_on_write_error(const param_entry_t *entry, float value)
 {
   (void)entry;
   g_axis.error = (uint32_t)(int32_t)value;
+  axis_set_requested_state(&g_axis, AXIS_STATE_IDLE);
+}
+
+/*
+ * Per-component error writes (the ODrive host writes 0 to each of them to clear
+ * that component).  Same side effect as param_on_write_error() above -- return to
+ * IDLE -- but the assignment is scoped to the row's own mask: only the maskable
+ * bits of the written value are stored, and no other component's bits move.
+ * Writing 0 therefore clears exactly this component.
+ */
+static void param_on_write_motor_error(const param_entry_t *entry, float value)
+{
+  (void)entry;
+  g_axis.error = (g_axis.error & ~(uint32_t)AXIS_ERROR_MASK_MOTOR) |
+                 ((uint32_t)(int32_t)value & (uint32_t)AXIS_ERROR_MASK_MOTOR);
+  axis_set_requested_state(&g_axis, AXIS_STATE_IDLE);
+}
+
+static void param_on_write_encoder_error(const param_entry_t *entry, float value)
+{
+  (void)entry;
+  g_axis.error = (g_axis.error & ~(uint32_t)AXIS_ERROR_MASK_ENCODER) |
+                 ((uint32_t)(int32_t)value & (uint32_t)AXIS_ERROR_MASK_ENCODER);
+  axis_set_requested_state(&g_axis, AXIS_STATE_IDLE);
+}
+
+static void param_on_write_controller_error(const param_entry_t *entry, float value)
+{
+  (void)entry;
+  g_axis.error = (g_axis.error & ~(uint32_t)AXIS_ERROR_MASK_CONTROLLER) |
+                 ((uint32_t)(int32_t)value & (uint32_t)AXIS_ERROR_MASK_CONTROLLER);
   axis_set_requested_state(&g_axis, AXIS_STATE_IDLE);
 }
 
@@ -179,8 +237,32 @@ static void param_on_write_can_termination(const param_entry_t *entry, float val
  * Parameter table
  *
  * Columns: path, alias, kind, precision, read_ptr, config_ptr, on_write,
- *          min_value, max_value, clamp
+ *          min_value, max_value, clamp[, on_read]
+ *
+ * on_read is appended LAST so that every row written before the hook existed
+ * keeps its exact positional initializer and the omitted field is
+ * zero-initialised to NULL -- i.e. adding it changes no existing row.
  * ------------------------------------------------------------------------- */
+
+/*
+ * A row omits the trailing on_read hook when it has no computed value, and that
+ * omitted field is NULL -- exactly what the hook field means.  The compiler
+ * cannot know that, so -Wextra's -Wmissing-field-initializers fires on every one
+ * of those rows.
+ *
+ * The warning is silenced here instead of writing an explicit `NULL` into each
+ * row: appending the hook must leave the existing rows byte-identical, and their
+ * shape is already checked loudly elsewhere -- tools/gen_fibre_endpoints.py
+ * rejects any row that does not have exactly 10 or 11 fields and validates each
+ * field, and `make check-fibre` turns that into a build failure.  A genuinely
+ * malformed row therefore still cannot land.
+ *
+ * GNU-only, so ARMCC (AC5) never sees the pragma.
+ */
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#endif
 
 static const param_entry_t s_params[] =
 {
@@ -193,6 +275,20 @@ static const param_entry_t s_params[] =
 
   { "axis0.error", NULL, PARAM_KIND_U32, 0u, &g_axis.error, NULL, param_on_write_error,
     -PARAM_UNBOUNDED, PARAM_UNBOUNDED, true },
+
+  /*
+   * Per-component views of axis0.error: each one reads and writes only its own
+   * AXIS_ERROR_MASK_* slice, so the official GUI's Clear Errors button -- which
+   * writes 0 to axis0.error and to these three -- clears every component.
+   */
+  { "axis0.motor.error", NULL, PARAM_KIND_U32, 0u, NULL, NULL, param_on_write_motor_error,
+    -PARAM_UNBOUNDED, PARAM_UNBOUNDED, true, param_on_read_motor_error },
+  { "axis0.encoder.error", NULL, PARAM_KIND_U32, 0u, NULL, NULL, param_on_write_encoder_error,
+    -PARAM_UNBOUNDED, PARAM_UNBOUNDED, true, param_on_read_encoder_error },
+  { "axis0.controller.error", NULL, PARAM_KIND_U32, 0u, NULL, NULL,
+    param_on_write_controller_error,
+    -PARAM_UNBOUNDED, PARAM_UNBOUNDED, true, param_on_read_controller_error },
+
   { "axis0.last_error", NULL, PARAM_KIND_U32, 0u, &g_axis.last_error, NULL, NULL,
     -PARAM_UNBOUNDED, PARAM_UNBOUNDED, true },
   { "axis0.last_error_time_ms", NULL, PARAM_KIND_U32, 0u, &g_axis.last_error_time_ms, NULL, NULL,
@@ -381,6 +477,10 @@ static const param_entry_t s_params[] =
     0.0f, PARAM_UNBOUNDED, true },
 };
 
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
 #define PARAM_COUNT  (sizeof(s_params) / sizeof(s_params[0]))
 
 static const param_entry_t *param_find(const char *path)
@@ -431,6 +531,7 @@ bool param_save_configuration(void)
 void param_print(const char *path)
 {
   const param_entry_t *entry = param_find(path);
+  param_value_t value;
 
   /*
    * ODrive ASCII semantics: a successful read answers with the bare value and
@@ -443,30 +544,35 @@ void param_print(const char *path)
     return;
   }
 
-  if (entry->read_ptr == NULL)
+  /*
+   * One read path for every protocol: param_read_entry() already applies the
+   * on_read-before-read_ptr precedence, so a computed row (axis0.motor.error and
+   * friends) prints here exactly like a memory-backed one.  Duplicating the kind
+   * switch would be a second place for the two to disagree.
+   */
+  if (param_read_entry(entry, &value) != PARAM_RESULT_OK)
   {
-    /* The property exists in the namespace but cannot be read back. */
+    /* Readable nowhere: the read_ptr is NULL and there is no on_read hook. */
     uart_comm_printf("not implemented\r\n");
     return;
   }
 
-  switch (entry->kind)
+  switch (value.kind)
   {
     case PARAM_KIND_F32:
-      uart_comm_printf("%.*f\r\n", (int)entry->precision,
-                       (double)param_load_f32(entry->read_ptr));
+      uart_comm_printf("%.*f\r\n", (int)entry->precision, (double)value.f32);
       break;
 
     case PARAM_KIND_I32:
-      uart_comm_printf("%ld\r\n", (long)param_load_i32(entry->read_ptr));
+      uart_comm_printf("%ld\r\n", (long)value.i32);
       break;
 
     case PARAM_KIND_U32:
-      uart_comm_printf("%lu\r\n", (unsigned long)param_load_u32(entry->read_ptr));
+      uart_comm_printf("%lu\r\n", (unsigned long)value.u32);
       break;
 
     case PARAM_KIND_U16:
-      uart_comm_printf("%lu\r\n", (unsigned long)param_load_u16(entry->read_ptr));
+      uart_comm_printf("%lu\r\n", (unsigned long)value.u16);
       break;
 
     default:
@@ -556,6 +662,38 @@ param_result_t param_read_entry(const param_entry_t *entry, param_value_t *out)
   if ((entry == NULL) || (out == NULL))
   {
     return PARAM_RESULT_UNKNOWN;
+  }
+
+  /*
+   * Computed value first: a row may deliberately have no read_ptr (the per
+   * component error views are masked views of g_axis.error), and read_ptr == NULL
+   * must only mean "unreadable" when there is no hook either.
+   */
+  if (entry->on_read != NULL)
+  {
+    float computed = entry->on_read(entry);
+
+    out->kind = entry->kind;
+
+    switch (entry->kind)
+    {
+      case PARAM_KIND_F32:
+        out->f32 = computed;
+        break;
+      case PARAM_KIND_I32:
+        out->i32 = (int32_t)computed;
+        break;
+      case PARAM_KIND_U32:
+        out->u32 = (uint32_t)computed;
+        break;
+      case PARAM_KIND_U16:
+        out->u16 = (uint16_t)computed;
+        break;
+      default:
+        return PARAM_RESULT_UNKNOWN;
+    }
+
+    return PARAM_RESULT_OK;
   }
 
   if (entry->read_ptr == NULL)

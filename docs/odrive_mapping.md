@@ -189,9 +189,10 @@ ss / sr / sc                        保存 / 重启 / 清错误
 - 没有 ChibiOS/FreeRTOS，使用裸机中断 + 主循环。
 - Fibre 0.1 端点树由 `firmware/Src/param.c` 的 `s_params[]` 表**生成**：
   `tools/gen_fibre_endpoints.py` → `firmware/Inc/fibre_endpoints_generated.h`。
-  含 69 行参数 + 5 个身份端点（`fw_version_revision`、`hw_version_*`、`serial_number`）
-  + 2 个零参数函数端点（`save_configuration`、`axis0.clear_errors`），共 75 个端点、
-  描述符 5461 字节。USB 侧沿用 vendor 接口（class 0/subclass 1/protocol 0，EP 0x03/0x83）。
+  含 72 行参数（71 个属性 + `axis0.clear_errors` 这一函数端点行）、5 个身份端点
+  （`fw_version_revision`、`hw_version_*`、`serial_number`）与 2 个零参数函数端点
+  （`save_configuration`、`axis0.clear_errors`），共 78 个端点、描述符 5626 字节、
+  `json_crc = 0x5B67`。USB 侧沿用 vendor 接口（class 0/subclass 1/protocol 0，EP 0x03/0x83）。
   路径、类型与写路径全部来自 param 表，故与 UART/CAN **不会漂移**；写操作经
   `param_write_entry()` → `param_store()`，继承全部范围检查、`nvm_config_apply()` 下发
   与"改 `pole_pairs`/`cpr` 即作废编码器偏置校准"的保护。
@@ -203,16 +204,19 @@ ss / sr / sc                        保存 / 重启 / 清错误
   `cd firmware && mingw32-make check-fibre`。
   真机仍需确认 USB 枚举、WinUSB 绑定与 GUI 实际连接。
   其余上位机仍可用 ODriveArduino 等 ASCII 客户端，以及 python-can + 官方 DBC 的 CAN 客户端（见 `tools/odrive_can_smoke.py`）。
-- **已知缺口：官方 GUI 的 "Clear Errors" 按钮仍不可用。** `GUI/src/components/clearErrors.vue:20-28`
-  是往四个**属性**写 0：`axis0.error`、`axis0.motor.error`、`axis0.encoder.error`、
-  `axis0.controller.error`。后三个不在 `s_params[]` 里，`odrive_server.py` 的 `getattr`
-  会抛异常并被 `postVal` 吞掉，现象是"点了没反应"。本工程暴露的 `axis0.clear_errors`
-  是**函数端点**（`type:"function"`），而官方 GUI 除了 `save_configuration` 之外不调用
-  任何函数端点（唯一调用点 `CtrlFunction.vue:31`），所以**它不会被宿主触发**——保留它
-  只是为了与 ODrive 接口对齐，不代表 GUI 具备清错误能力。
-  要真正修好按钮，需把 `axis0.motor.error`/`axis0.encoder.error`/`axis0.controller.error`
-  加入 `s_params[]` 并重新生成描述符（`axis.h:53-64` 已有对应的
-  `AXIS_ERROR_MASK_MOTOR/ENCODER/CONTROLLER` 掩码可复用）。
+- **官方 GUI 的 "Clear Errors" 按钮可用。** `GUI/src/components/clearErrors.vue:20-28` 是往四个
+  **属性**写 0：`axis0.error`、`axis0.motor.error`、`axis0.encoder.error`、
+  `axis0.controller.error`，四次写入各自独立，失败的那次会被 `postVal` 吞掉。这四个属性现在
+  全部在 `s_params[]` 里、全部是 `rw`（官方接口中 `Controller.error`/`Encoder.error` 也没有
+  `readonly`，即真机上同样可写），所以四次写入都会生效。
+  `axis0.error` 一直可写，因此即使后三个曾经缺失，第一次写入也已经清掉全部错误位；本次补齐
+  只是让按钮的另外三个请求也有了对应属性，而不是"修好了一个本来完全没反应的按钮"。
+  这三个分量属性是 `g_axis.error` 的**掩码视图**：读走 `on_read` 钩子计算
+  （`g_axis.error & AXIS_ERROR_MASK_*`），写只改写本分量的掩码位、不碰其它分量，
+  掩码复用 `axis.h:53-64` 的 `AXIS_ERROR_MASK_MOTOR/ENCODER/CONTROLLER`。
+  `axis0.clear_errors` 仍是**函数端点**（`type:"function"`），保留它是为了与 ODrive 接口对齐：
+  官方 GUI 除了 `save_configuration` 之外不调用任何函数端点（唯一调用点 `CtrlFunction.vue:31`），
+  所以**它依然不会被宿主触发**——清错误能力来自上面那四个属性，不是它。
 - 控制器量纲做了简化，`input_torque` 近似为 q 轴电流，没有除以力矩常数 `Kt`。
 - 电机 R/L、编码器方向/偏置已实现；力矩常数辨识、增益调度、抗齿槽、无感 FOC、弱磁、MTPA 未实现。
 - 没有制动电阻控制，因为本板硬件没有制动斩波器。

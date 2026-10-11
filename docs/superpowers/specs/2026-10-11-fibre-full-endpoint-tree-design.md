@@ -48,6 +48,12 @@ Fibre 0.1）能够真正使用本板固件：不仅能**发现**设备，还能�
   > 只用于 `save_configuration`。所以 `axis0.clear_errors` 这个函数端点**没有任何宿主会触发**，
   > 保留它只是为了与 ODrive 接口对齐。**GUI 的 Clear Errors 按钮仍未修好**——见
   > `docs/odrive_mapping.md` §5 的"已知缺口"，以及 §4.5 的同名更正。
+  >
+  > **再次更正（跟进提交）：这个缺口已经补上。** `axis0.motor.error`、`axis0.encoder.error`、
+  > `axis0.controller.error` 三个属性已加入 `s_params[]`（`g_axis.error` 的掩码视图，
+  > 读用 `on_read` 计算、写按本分量的 `AXIS_ERROR_MASK_*` 位改写），描述符已重新生成，
+  > 官方 GUI 的四个写请求现在都有对应属性。因此 `docs/odrive_mapping.md` §5 里那段
+  > "已知缺口"已改写成"按钮可用"；`axis0.clear_errors` 仍然没有任何宿主会触发。
 - 补齐 spec 缺口：endpoint 0 的 `offset == 0xFFFFFFFF` 返回 `json_version_id`。
 - 把一致性脚本固化进仓库，作为不需要工具链的回归测试。
 - 同步 `docs/` 与 `AGENTS.md`。
@@ -202,6 +208,10 @@ param_result_t param_write_entry(const param_entry_t *entry, float value);
   > 需要把 `axis0.motor.error`/`axis0.encoder.error`/`axis0.controller.error` 三个属性补进
   > `s_params[]` 并重新生成描述符；`axis.h:53-64` 已有可复用的
   > `AXIS_ERROR_MASK_MOTOR/ENCODER/CONTROLLER` 掩码。本次**未做**。
+  >
+  > **再次更正（跟进提交）：已做。** 三个属性随后补进了 `s_params[]` 并重新生成了描述符，
+  > 官方 GUI 的 Clear Errors 按钮因此可用；这一行（`axis0.clear_errors` 作为函数端点）
+  > 保持原样，仍然只是接口对齐。
 - 生成表里的哨兵 `FIBRE_EP_NOT_PARAM`（身份端点，见 4.3.1）交给手写的 `fibre_identity_read()`。
 - 未知 id、非法长度一律返回 0 字节（保持现有语义）。
 

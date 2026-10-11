@@ -181,6 +181,29 @@ static const param_entry_t *row_for(uint16_t endpoint_id, uint32_t *count)
  * Property read / write
  * ------------------------------------------------------------------------- */
 
+/*
+ * Wire width of a property kind, i.e. the width of the codec the descriptor
+ * declares for it: 4 bytes for float/int32/uint32, 2 for uint16, 0 for a kind
+ * this layer cannot decode.  property_decode() cross-checks it against the
+ * generated s_fibre_ep_width[] before decoding.
+ */
+static uint16_t param_kind_width(param_kind_t kind)
+{
+  switch (kind)
+  {
+    case PARAM_KIND_F32:
+    case PARAM_KIND_I32:
+    case PARAM_KIND_U32:
+      return 4u;
+
+    case PARAM_KIND_U16:
+      return 2u;
+
+    default:
+      return 0u;
+  }
+}
+
 uint16_t fibre_endpoint_read(uint16_t endpoint_id, uint8_t *buffer, uint16_t buffer_len)
 {
   uint32_t count = 0u;
@@ -246,17 +269,31 @@ uint16_t fibre_endpoint_read(uint16_t endpoint_id, uint8_t *buffer, uint16_t buf
 
 /*
  * Decode one property payload into the float that param_write_entry() takes,
- * or return false when the payload length is not this property's codec width.
+ * or return false when the payload cannot be written.
  *
- * The length test is the important part: the host sends an EMPTY payload when
- * it only wants to read, and an empty payload must never be read as "write
- * zero".  A wrong length is not written at all.
+ * Two independent reasons to refuse:
+ *
+ *  - The generated width (s_fibre_ep_width[], from the descriptor's declared
+ *    codec) must equal the width implied by entry->kind, which is what the
+ *    switch below actually decodes with.  Both descend from the same param.c
+ *    row, but descending from one row is a coupling, not a guarantee, and a
+ *    disagreement would make the 4-byte decode read two bytes past a 2-byte
+ *    payload.  Checked, not assumed.
+ *
+ *  - The payload length must be exactly that width: the host sends an EMPTY
+ *    payload when it only wants to read, and an empty payload must never be
+ *    read as "write zero".  A wrong length is not written at all.
  */
 static bool property_decode(const param_entry_t *entry, uint16_t endpoint_id,
                             const uint8_t *buffer, uint16_t buffer_len, float *value_out)
 {
-  /* Generated once from the declared codec, so code and descriptor agree. */
+  /* Generated from the declared codec. */
   uint16_t width = (uint16_t)s_fibre_ep_width[endpoint_id];
+
+  if (width != param_kind_width(entry->kind))
+  {
+    return false;
+  }
 
   if (buffer_len != width)
   {

@@ -86,7 +86,14 @@ IDENTITY_ENDPOINTS = [
 FUNCTION_ENDPOINTS = ["save_configuration", "axis0.clear_errors"]
 
 # path, alias, kind, precision, read_ptr, config_ptr, on_write, min, max, clamp
+# [, on_read]
+#
+# on_read is the optional ELEVENTH field (param.h: `param_on_read_t on_read`),
+# appended after `clamp` so that every row written before it existed keeps its
+# 10-field positional initializer and C zero-initialises the omitted hook.  Both
+# counts must therefore parse: 10 fields means "no computed value".
 PARAM_FIELD_COUNT = 10
+PARAM_FIELD_COUNT_WITH_ON_READ = 11
 
 # path, id, type, access / inputs+outputs / members -- objects carry no id.
 HEADER_GUARD = "AT32_ODRIVE_FIBRE_ENDPOINTS_GENERATED_H"
@@ -239,6 +246,9 @@ def parse_param_rows(text):
     Brace-group based, never line based: rows span several lines, and the fields
     inside a row are separated by top-level commas that only the tokenizer above
     can tell apart from the commas between rows.
+
+    A row carries 10 fields, or 11 once the optional trailing on_read hook is
+    present; both are accepted, and an absent hook counts as NULL.
     """
     stripped = strip_comments(text)
     body, body_offset = extract_initializer_body(stripped, "s_params[]")
@@ -255,10 +265,11 @@ def parse_param_rows(text):
                  % (where, len(rows) + 1, raw[:120]))
 
         fields = split_top_level(raw[1:-1])
-        if len(fields) != PARAM_FIELD_COUNT:
-            fail("%s: row has %d fields, expected %d (path, alias, kind, precision, "
-                 "read_ptr, config_ptr, on_write, min, max, clamp): %s"
-                 % (where, len(fields), PARAM_FIELD_COUNT, raw[:120]))
+        if len(fields) not in (PARAM_FIELD_COUNT, PARAM_FIELD_COUNT_WITH_ON_READ):
+            fail("%s: row has %d fields, expected %d or %d (path, alias, kind, precision, "
+                 "read_ptr, config_ptr, on_write, min, max, clamp[, on_read]): %s"
+                 % (where, len(fields), PARAM_FIELD_COUNT,
+                    PARAM_FIELD_COUNT_WITH_ON_READ, raw[:120]))
 
         path_literal = fields[0]
         if (len(path_literal) < 2 or path_literal[0] != '"'
@@ -277,6 +288,8 @@ def parse_param_rows(text):
         read_ptr = fields[4]
         config_ptr = fields[5]
         on_write = fields[6]
+        # Absent on 10-field rows: an omitted trailing initializer is NULL.
+        on_read = fields[PARAM_FIELD_COUNT] if len(fields) > PARAM_FIELD_COUNT else "NULL"
         # Cheap shape check that catches a mis-parse (a shifted field order would
         # otherwise silently change which endpoints are writable).
         if read_ptr != "NULL" and not read_ptr.startswith("&"):
@@ -288,12 +301,17 @@ def parse_param_rows(text):
         if on_write != "NULL" and not is_identifier(on_write):
             fail("%s: on_write for %r is neither NULL nor an identifier: %s"
                  % (where, path, on_write[:60]))
+        if on_read != "NULL" and not is_identifier(on_read):
+            fail("%s: on_read for %r is neither NULL nor an identifier: %s"
+                 % (where, path, on_read[:60]))
 
         rows.append({
             "index": len(rows),
             "path": path,
             "kind": kind,
-            "readable": read_ptr != "NULL",
+            # param.c's readability rule: a value comes from the on_read hook when
+            # there is one, otherwise from read_ptr.
+            "readable": (read_ptr != "NULL") or (on_read != "NULL"),
             # The predicate param.c itself uses to return PARAM_RESULT_READ_ONLY.
             "writable": (config_ptr != "NULL") or (on_write != "NULL"),
             "line": line,
@@ -314,9 +332,9 @@ def parse_param_rows(text):
 
     for row in rows:
         if not row["readable"] and row["path"] not in FUNCTION_ENDPOINTS:
-            fail("line %d: row %r has read_ptr == NULL, so it is not a property, and it "
-                 "is not in FUNCTION_ENDPOINTS -- declare it there (or give the row a "
-                 "read_ptr)" % (row["line"], row["path"]))
+            fail("line %d: row %r has read_ptr == NULL and no on_read hook, so it is not "
+                 "a property, and it is not in FUNCTION_ENDPOINTS -- declare it there "
+                 "(or give the row a read_ptr or an on_read)" % (row["line"], row["path"]))
 
     for path in FUNCTION_ENDPOINTS:
         row = seen.get(path)

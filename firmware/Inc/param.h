@@ -15,6 +15,11 @@
  * Persisted parameters live in g_odrive_config.  After such a write the table
  * calls nvm_config_apply(), which is the only function that copies configuration
  * into the live copies inside g_axis, so the two views cannot drift.
+ *
+ * A row is readable when it has a read_ptr *or* an on_read hook, and writable
+ * when it has a config_ptr or an on_write hook; both protocols (ASCII "r"/"w",
+ * CAN Simple, Fibre) resolve readability through param_read_entry(), so a
+ * computed value is readable everywhere or nowhere.
  */
 
 typedef enum
@@ -42,6 +47,15 @@ struct param_entry;
  */
 typedef void (*param_on_write_t)(const struct param_entry *entry, float value);
 
+/*
+ * Optional computed value for rows whose value is not stored anywhere: a masked
+ * view of another field, for example.  Consulted BEFORE read_ptr, so a row may
+ * leave read_ptr NULL and still be readable.  The hook returns a float (the
+ * masks involved are a few thousand at most, so it is exact) and the row's kind
+ * says how that value is reported on the wire.
+ */
+typedef float (*param_on_read_t)(const struct param_entry *entry);
+
 typedef struct param_entry
 {
   const char       *path;       /* canonical ASCII path */
@@ -54,6 +68,7 @@ typedef struct param_entry
   float             min_value;
   float             max_value;
   bool              clamp;      /* true: clamp to bounds, false: reject */
+  param_on_read_t   on_read;    /* computed value; NULL = read read_ptr */
 } param_entry_t;
 
 /* Print "<path>: <value>" (or "<path>: unknown") to the UART. */
@@ -90,8 +105,9 @@ typedef struct
   uint16_t     u16;
 } param_value_t;
 
-/* Read one row by entry.  Returns PARAM_RESULT_READ_ONLY if the row has no
- * read_ptr, PARAM_RESULT_UNKNOWN for an unhandled kind. */
+/* Read one row by entry.  The on_read hook wins when the row has one, otherwise
+ * the value comes from read_ptr.  Returns PARAM_RESULT_READ_ONLY if the row has
+ * neither, PARAM_RESULT_UNKNOWN for an unhandled kind. */
 param_result_t param_read_entry(const param_entry_t *entry, param_value_t *out);
 
 /* The canonical parameter table, in declaration order.  Lets the Fibre layer
