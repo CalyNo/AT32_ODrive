@@ -110,12 +110,17 @@
 /* Bring-up instrumentation for a board with neither a debugger nor a serial
  * adapter: blink the stage number of app_init() on the status LED (green =
  * intended 288 MHz clock, red = degraded HICK fallback), so one flash says
- * where the boot stopped.  Set to 0 to remove the markers again once the board
- * boots reliably; see docs/bringup.md.  Unlike BOOT_TRACE_ENABLE this one is
- * guarded, so the disabled path can be compiled (and verified) with
- * -DBOOT_MARKER_ENABLE=0 without editing this file. */
+ * where the boot stopped.  See docs/bringup.md.
+ *
+ * OFF by default since the 2026-10-11 bring-up session: the board is now known
+ * to boot -- USB enumerates and Windows reads the descriptors -- so the markers
+ * have served their purpose, and the ~10 s of blocking delays they add to
+ * app_init() are a liability rather than a help.  Build with
+ * -DBOOT_MARKER_ENABLE=1 to localise a boot hang again.  The markers feed the
+ * watchdog from inside their delays, so they cannot by themselves trip a
+ * leftover IWDG across a warm reset. */
 #ifndef BOOT_MARKER_ENABLE
-#define BOOT_MARKER_ENABLE              (1u)
+#define BOOT_MARKER_ENABLE              (0u)
 #endif
 
 /* Firmware version */

@@ -120,6 +120,18 @@ static void boot_marker_delay_loops(uint32_t loops)
 {
   volatile uint32_t remaining = loops;
 
+  /*
+   * Feed the watchdog from inside the delay.  app_init() feeds it once at the
+   * top and only arms it at the very end, and the IWDG keeps counting across a
+   * system reset (only a power-on reset stops it, see the note above app_init).
+   * Without this feed, a warm reset followed by the markers' ~10 s of blocking
+   * waits would trip a leftover 200 ms IWDG and turn the board into a reset
+   * loop -- the instrumentation would then create the very failure it exists
+   * to diagnose.  Feeding is a cheap register write and is harmless when the
+   * watchdog has not been armed yet.
+   */
+  board_watchdog_feed();
+
   while (remaining != 0u)
   {
     remaining--;
