@@ -107,6 +107,17 @@
  * good; the "ready" banner is printed either way. */
 #define BOOT_TRACE_ENABLE               (1u)
 
+/* Bring-up instrumentation for a board with neither a debugger nor a serial
+ * adapter: blink the stage number of app_init() on the status LED (green =
+ * intended 288 MHz clock, red = degraded HICK fallback), so one flash says
+ * where the boot stopped.  Set to 0 to remove the markers again once the board
+ * boots reliably; see docs/bringup.md.  Unlike BOOT_TRACE_ENABLE this one is
+ * guarded, so the disabled path can be compiled (and verified) with
+ * -DBOOT_MARKER_ENABLE=0 without editing this file. */
+#ifndef BOOT_MARKER_ENABLE
+#define BOOT_MARKER_ENABLE              (1u)
+#endif
+
 /* Firmware version */
 #define FIRMWARE_VERSION_MAJOR          (0u)
 #define FIRMWARE_VERSION_MINOR          (1u)
