@@ -59,5 +59,12 @@
 - 新增/删除 `firmware/Src` 下的源文件时，必须同时更新 `tools/gen_keil_project.py`
   的 `USER_SOURCES` 并重新生成 Keil 工程（`python tools/gen_keil_project.py`），
   否则 Makefile 与 Keil 工程会漂移。
+- 改动 `firmware/Src/param.c` 的 `s_params[]` 之后，必须重跑
+  `python tools/gen_fibre_endpoints.py` 并提交 `firmware/Inc/fibre_endpoints_generated.h`
+  （漂移检查：`cd firmware && mingw32-make check-fibre`）。Fibre 描述符与参数表不一致时
+  上位机**不会报错**，只会静默拒绝所有请求，现象是"什么都没发生"。
+- Fibre 描述符的一致性测试：`python tools/fibre_conformance.py`。它不需要 C 工具链，
+  用官方 `fibre.protocol` 与 `docs/protocol.rst` 的测试向量核对 CRC，并检查
+  官方 GUI Tuning 看板的全部路径可解析。
 - 不使用动态内存；不在中断中使用浮点长运算（除 FOC 必要的有限运算外）。
 - 生成代码中的中文只用于注释，标识符/变量/文件名使用英文。

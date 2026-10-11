@@ -65,6 +65,20 @@ void ws2812_init(void)
   crm_periph_clock_enable(CRM_TMR20_PERIPH_CLOCK, TRUE);
   crm_periph_clock_enable(CRM_DMA1_PERIPH_CLOCK, TRUE);
 
+  /*
+   * Make this function idempotent.  The boot-marker path (see app.c,
+   * BOOT_MARKER_ENABLE) and status_led_init() both need the driver, so init can
+   * run twice; the reference manual only allows the DMA channel registers to be
+   * written while the channel is disabled, so stop the timer and disable the
+   * channel first instead of reconfiguring a possibly enabled one (which would
+   * also leave a frame half sent and the DMAMUX request still asserted).
+   * dma_reset() also disables the interrupt enables, which is why the interrupt
+   * is enabled again further down, exactly as on the first call.
+   */
+  dma_channel_enable(WS2812_DMA_CHANNEL, FALSE);
+  tmr_counter_enable(WS2812_TMR, FALSE);
+  dma_reset(WS2812_DMA_CHANNEL);
+
   /* PB2 -> alternate function 2 = TMR20_CH1 (reference manual Table 6-2). */
   gpio_default_para_init(&gpio_init_struct);
   gpio_init_struct.gpio_pins = GPIO_PINS_2;

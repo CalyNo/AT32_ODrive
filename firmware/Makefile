@@ -97,13 +97,33 @@ $(HEX): $(ELF)
 # so a symbol referenced from a section that GCC would garbage-collect still has
 # to resolve -- the CDC class's usb_delay_ms() hook was exactly that case.
 # This target mirrors the Keil behaviour and fails on any undefined symbol.
+#
+# check-fibre is a prerequisite so the documented verification flow runs the
+# descriptor drift guard too: a stale Inc/fibre_endpoints_generated.h is not a
+# link error, it only makes every Fibre request fail silently on the board.
 .PHONY: check-link
-check-link: $(OBJS) $(LDSCRIPT)
+check-link: check-fibre $(OBJS) $(LDSCRIPT)
 	@mkdir -p $(dir $(ELF))
 	$(CC) $(CPU_FLAGS) -T$(LDSCRIPT) -Wl,--no-warn-rwx-segments \
 		--specs=nano.specs --specs=nosys.specs \
 		-u _printf_float \
 		$(OBJS) -o $(BUILD_DIR)/$(TARGET)_fulllink.elf -lm
+
+# --- Fibre endpoint descriptor -------------------------------------------------
+# Inc/fibre_endpoints_generated.h is generated from the s_params[] table in
+# Src/param.c.  Regenerate it after ANY change to that table.  A descriptor that
+# no longer matches the table is NOT reported by the host: it silently rejects
+# every request, because the json_crc trailer stops matching, and the symptom is
+# "nothing happens" rather than an error.
+#
+# check-fibre is the drift guard: it exits non-zero when the committed header no
+# longer matches Src/param.c, so a stale descriptor cannot be committed quietly.
+.PHONY: gen-fibre check-fibre
+gen-fibre:
+	python ../tools/gen_fibre_endpoints.py
+
+check-fibre:
+	python ../tools/gen_fibre_endpoints.py --check
 
 $(BIN): $(ELF)
 	$(OBJCOPY) -O binary $< $@

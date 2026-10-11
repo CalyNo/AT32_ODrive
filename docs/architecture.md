@@ -241,6 +241,12 @@ ADC injected: ia, ib, ic, vbus
 | `ss` | 无任何输出 | 保存成功静默，失败才回 `save failed` |
 | 未知命令字母 | `unknown command` | |
 
+注意上表里 `axis0.clear_errors` 的两行描述的是 **ASCII 协议**这一侧：ASCII 只有写路径、没有
+读路径，所以 `r` 回 `not implemented`。同一个名字在 Fibre 端点树里是零参数**函数**端点
+（§10、`docs/odrive_mapping.md` §5），两者并不矛盾：清错误能力在 Fibre 侧是函数调用，
+在 ASCII 侧是 `w axis0.clear_errors 1` 这条只写属性。按分量清错误的
+`axis0.motor/encoder/controller.error` 在两边都是可读可写的普通属性。
+
 写入持久化参数后立即调用 `nvm_config_apply()`，因此改了增益/限幅后无需重启，
 也不需要先 `ss`；掉电保存才需要显式保存。改变电角度映射的参数
 （`pole_pairs`、`cpr`）会显式作废编码器偏置校准，`CLOSED_LOOP_CONTROL` 被重新阻塞。
@@ -288,7 +294,9 @@ ADC injected: ia, ib, ic, vbus
 
 ## 10. 后续扩展点
 
-- Fibre 0.1 端点的完整 0.5.x 对象树、订阅、函数端点和 DFU。
+- Fibre 0.1 端点：对象树（72 行参数）与零参数函数端点**已由 `param.c` 生成**，
+  见 `docs/odrive_mapping.md` §5 与 `tools/gen_fibre_endpoints.py`；
+  仍缺订阅、DFU 与复合类型端点（`system_stats`/`oscilloscope` 等）。
 - CAN Simple / ASCII 协议继续补全。
 - Flash 配置双备份/磨损均衡。
 - 力矩常数辨识、增益调度、抗齿槽、无感 FOC、弱磁、MTPA。

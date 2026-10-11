@@ -24,8 +24,34 @@ typedef enum
   AXIS_STATE_ENCODER_HALL_POLARITY_CALIBRATION = 12,
   AXIS_STATE_ENCODER_HALL_PHASE_CALIBRATION = 13,
   AXIS_STATE_ANTICOGGING_CALIBRATION = 14,
-  AXIS_STATE_ERROR = 15
+  AXIS_STATE_ERROR = 15,
+
+  /*
+   * Not a state.  It exists only to pin this enum to 32 bits.
+   *
+   * ARM Compiler 5 sizes an enum to the smallest type that holds its values, so
+   * without this the axis states are one byte each.  The parameter table
+   * (firmware/Src/param.c) publishes axis0.current_state and
+   * axis0.requested_state as PARAM_KIND_I32, and param_load_i32() reads a full
+   * four bytes -- so a one-byte field drags in the fields that follow it.  An
+   * axis sitting in IDLE with last_state still UNDEFINED therefore reads back
+   * as 257 (0x00000101) instead of 1, and that wrong value is what Fibre, the
+   * ASCII console and CAN all report.  The storage width has to match the kind
+   * the table declares.
+   *
+   * Never assign, compare against, or transmit this value.
+   */
+  AXIS_STATE_FORCE_32BIT = 0x7FFFFFFF
 } axis_state_t;
+
+/*
+ * Guard for the comment above: if a future toolchain or enum edit changes the
+ * width of axis_state_t, the parameter table's 32-bit reads quietly start
+ * reporting neighbouring memory instead of the state, so fail the build.  A
+ * negative array bound is the C89-compatible spelling of a static assertion
+ * (ARM Compiler 5 runs in C99 mode and has no _Static_assert).
+ */
+typedef char axis_state_t_must_be_32_bits[(sizeof(axis_state_t) == 4) ? 1 : -1];
 
 typedef enum
 {

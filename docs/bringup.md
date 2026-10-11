@@ -124,7 +124,8 @@ r fw_version_minor      -> 1
     （`pwm_enable()` 拒绝使能、`axis_arm()` 报 INVALID_STATE），属预期保护。
   - 依然一个字符都没有：说明连 HICK 兜底都没走到 —— 大概率是主机侧问题（TX/RX 接反、
     没共地、适配器是 5V 电平、选错 COM 口），其次才是复位/供电。用调试器看 PC 停在哪，
-    参考 `docs/assumptions.md` 第 7、13 节。
+    参考 `docs/assumptions.md` 第 7、13 节。**没有调试器也没有串口时**，改用第 6 节 a0 的
+    状态灯启动标记：它在完全无串口的情况下也能区分"卡在哪个初始化阶段"和"时钟是否正常"。
 - 收到乱码 → 波特率不对（应 115200）或时钟分频不对。
 - 历史坑（已修复，见 `docs/assumptions.md` 第 14 节）：`uart_comm_init()` 曾经漏掉
   `usart_transmitter_enable()`/`usart_receiver_enable()`，表现为 PC 停在
@@ -198,6 +199,48 @@ r axis0.encoder.vel_estimate   -> 速度估计
 ## 6. 状态灯（WS2812B-2020 / PB2）
 
 三种验证手段，从简到繁：
+
+**a0. 启动阶段标记（没有串口、没有调试器时的唯一手段）**
+
+`BOOT_MARKER_ENABLE`（`firmware/Inc/config.h`）**默认关闭**——2026-10-11 那次上板已确认板子能正常
+启动（USB 能枚举、Windows 读到了描述符），所以这套标记平时不需要开着，它会让 `app_init()` 多花
+约 10 秒。需要定位启动卡点时再打开（见本节末"开启方式"）：`app_init()` 会在 8 个检查点
+各打一次"阶段号"图案到 WS2812，**只看灯就能定位启动卡在哪一步**。读法：
+
+- **颜色 = 时钟状态**：**绿** = 288 MHz HEXT+PLL 正常；**红** = HEXT 没起来、退回
+  HICK（对应 `board.clock_degraded = 1`，此时 USB 不会启动）。
+- **闪几下 = 走到的阶段号**：同一阶段号会**闪两遍**（两组），组间停顿明显长于组内间隔，
+  便于用眼睛数准；每个图案最后**以熄灭结束**，所以"N 下之后就不亮了"= **卡在第 N 阶段之后**。
+
+| 阶段 | 代码位置（`app_init()`） | 说明 |
+| --- | --- | --- |
+| 1 | `board_clock_config()` 之后 | 最早的有效检查点；时钟本身由颜色报告 |
+| 2 | `board_init()` 之后 | 时钟 + GPIO |
+| 3 | `uart_comm_init()` 之后 | **`usb_cdc_init()` 就在这里跑** |
+| 4 | `usb_fibre_init()` 之后 | Fibre 端点栈 |
+| 5 | `adc_calibrate_current_offsets()` 之后 | 三路零电流校准（256 次采样） |
+| 6 | `nvm_config_load()`/`nvm_config_save()` 之后 | flash 配置读取 |
+| 7 | `axis_init()` + `nvm_config_apply()` 之后 | 轴/编码器初始化 |
+| 8 | `can_comm_init()` 之后 | 最后一个检查点，**紧接着 `status_led_init()` 接管灯** |
+
+例：**绿色闪 3 下、停一下、再闪 3 下、然后一直不亮** → 时钟正常，启动在
+`uart_comm_init()` 之后、`usb_fibre_init()` 之前卡住，即**卡在 USB 初始化里**；
+**红色闪 1 下 ×2 后不亮** → 有源晶振（X2/PH0）没起来，还没走到 `board_init()`。
+
+**必须知道的局限**：**一个标记都不出现是歧义的** —— 它既可能是"启动连第 1 阶段都没走到"
+（`board_clock_config()` 之前就挂了，或根本没有跑起来），也可能只是**WS2812 链路本身不工作**
+（灯没供电、DIN 接错、5V 供电导致 3.3V 数据电平不够，见下面 f 小节）。要区分这两种情况，
+只能靠示波器看 PB2 有没有波形，或者接上调试器看 PC。
+
+标记本身不会把启动挂死，**也不会把板子拖进复位循环**：所有等待都有上界（帧完成等待超时即放弃），
+且**延时循环内部会喂看门狗**——`app_init()` 只在开头喂一次、在末尾才使能 IWDG，而 IWDG 会跨系统
+复位继续计数（只有上电复位才停）；若不喂，标记那约 10 秒的阻塞会让热复位后残留的看门狗超时，
+把板子变成复位循环，**等于让诊断工具制造出它要诊断的那个故障**。另外定时器时钟在
+`board_clock_config()` 之前不满足 288 MHz 假设，所以第 1 阶段之前不放标记。
+
+**开启方式**：把 `firmware/Inc/config.h` 的 `BOOT_MARKER_ENABLE` 改成 `1u`，或编译时加
+`-DBOOT_MARKER_ENABLE=1`（该宏带 `#ifndef` 保护，命令行可以覆盖文件里的默认值）。
+默认 `0u`；置 0 后整套标记代码不参与编译，且它只影响启动阶段，运行时状态灯不受影响。
 
 **a. 自检序列**（不需要电机、不需要示波器）
 
@@ -336,6 +379,152 @@ r usb.tx_dropped    TX 环形缓冲溢出丢字节数（正常应长期为 0）
 ```text
 tools/odrive_ascii_smoke.py    # pyserial：校验 ASCII 响应语义（只回数值、写成功静默等）
 tools/odrive_can_smoke.py      # python-can + cantools：用官方 DBC 解码心跳/编码器/母线
+tools/odrive_fibre_smoke.py    # 官方 odrive/fibre 主机栈：读/写/函数端点/LED/复位原因
+tools/odrive_gui_backend.py    # 启动官方 GUI 的 Python 后端（见 §13）
+tools/odrive_gui_probe.js      # 用官方 GUI 自己的 socket.io 客户端无头验证这条链路
 ```
 
-两者都是 bring-up 辅助，未在本板上运行过（见 `docs/assumptions.md`）。
+`odrive_fibre_smoke.py` 走的就是官方 GUI 用的那条 USB 厂商接口通路，所以它 PASS 才
+说明 GUI 的传输层是好的，而不只是"收到了几个字节"。它的第 [3] 节会**调
+`clear_errors()`，也就是会清掉轴错误并回到 IDLE**；只想看故障现场就加 `--read-only`。
+它不会进入闭环、不会启动校准、不会调用 `save_configuration()`。
+
+```text
+python tools/odrive_fibre_smoke.py                 # 15 项全跑
+python tools/odrive_fibre_smoke.py --read-only     # 只看，不动
+python tools/odrive_fibre_smoke.py --tools <ODrive 克隆>/tools
+```
+
+ASCII / CAN 两个脚本是 bring-up 辅助，未在本板上运行过（见 `docs/assumptions.md`）；
+Fibre / GUI 三个已在真机跑通。
+
+## 12. 枚举宽度陷阱（ARM Compiler 5）
+
+**AC5 默认把枚举压缩成能装下所有枚举值的最小类型。** `axis_state_t` 最大只到
+`AXIS_STATE_ERROR = 15`，所以它在 AC5 下是 **1 字节**（`armcc` 实测
+`sizeof(axis_state_t) == 1`）。GCC 默认给枚举 4 字节，所以这个坑**只在 Keil 构建里出现**，
+主机侧测试和 `arm-none-eabi-gcc` 语法检查都看不见它。
+
+参数表却把 `axis0.current_state` / `axis0.requested_state` 声明为 `PARAM_KIND_I32`，
+`param_load_i32()` 按 4 字节读取，于是**把相邻字段一起读了进来**。真机 + 官方 GUI 后端实测：
+
+| 属性 | 读回值 | 解释 |
+| --- | --- | --- |
+| `axis0.requested_state` | **257**（`0x00000101`） | 低字节 `1` = IDLE（正确）；第 2 字节 `1` 是被顺手读进来的 `current_state`；高 2 字节是 `last_state` / `error` 的低位 |
+| `axis0.current_state` | 1 | **只是碰巧对**：紧随其后的 `last_state` / `error` 当时恰好都是 0。只要状态切换过一次（`last_state != 0`）或者 `error != 0`，读回值立刻变成垃圾 |
+
+Fibre / UART ASCII / CAN 三路都走 `param_read_entry()`，所以这一个 bug 对三者同时生效。
+它**不会报任何错**，只会安静地显示一个错数字 —— 这正是它能活到上板阶段才被发现的原因。
+
+修法（`firmware/Inc/axis.h`）：加一个只为占位而存在的枚举值
+`AXIS_STATE_FORCE_32BIT = 0x7FFFFFFF`，把枚举钉死在 32 位，再配一条 C89 风格的静态断言
+（负数组下标，`_Static_assert` 在 AC5 的 C99 模式下没有）：
+
+```c
+typedef char axis_state_t_must_be_32_bits[(sizeof(axis_state_t) == 4) ? 1 : -1];
+```
+
+宽度再被改回去就直接编译失败。副作用：`axis_t` 里 3 个状态字段各由 1 字节变 4 字节，
+`ZI-data` 5268 → 5276（+8），`Code` 58972。
+
+**真机确认**：烧录这一版之后，`axis0.requested_state` 读回 **1**（此前 257），
+读矩阵 19/19、写/函数端点/LED 诊断矩阵 14/14 全部通过。
+
+**同类风险**：`axis_error_t` 的最高位是 `1u << 12`，在 AC5 下是 **2 字节**。目前没有任何
+参数行指向 `axis_error_t` **变量**（`axis0.error` 指向的是 `uint32_t error` 字段，三个
+`*.error` 组件行是 `on_read` 计算值、`read_ptr` 为 `NULL`），所以没有实际错配。
+以后新增参数行时必须保证「存储宽度 == `PARAM_KIND_*` 的宽度」；
+`led_pattern.h` 用 `int32_t state` 存轴状态就是为了避开这一点。
+
+## 13. 官方 ODrive GUI（真机已验证）
+
+GUI 的 `GUI/src` 只用 socket.io，**没有 WebUSB 通路**（`fibre-js` 没接进去），所以必须同时
+跑 Python 后端；只在浏览器里打开 `dist` 是连不上设备的。
+
+```text
+# 1) 后端，监听 0.0.0.0:5000
+python tools/odrive_gui_backend.py <ODrive 克隆>/GUI/server/odrive_server.py
+# 2) 前端，静态托管已构建的 dist
+python -m http.server 8080 --directory <ODrive 克隆>/GUI/dist
+# 3) 浏览器打开 http://127.0.0.1:8080
+```
+
+`tools/odrive_gui_backend.py` 只从外部把上游那个文件跑起来，不改上游代码，因为有两个
+环境问题不属于本工程：
+
+- `fibre.utils.Logger.__init__` 在 Windows 上**无条件**使用 `win32console`，而导入它的
+  那一行写在 `try/except ImportError` 里 —— 缺 `pywin32` 就直接 `NameError`。装 `pywin32`。
+- `socketio.run()` 默认 `allow_unsafe_werkzeug=False`，Werkzeug 3.x 下会抛错；
+  该脚本给 `SocketIO.run` 打个补丁把这个参数传进去。
+
+**前后端协议版本必须配对**：GUI 用的是 `socket.io-client 3.0.4`（Engine.IO **v4**），
+服务端要 `flask-socketio 5.x` + `python-engineio 4.x`。装成 flask-socketio 4.x
+（Engine.IO v3）的表现是握手直接失败。
+
+已验证（真机 + 官方客户端）：后端发现设备 → 返回完整属性树（顶层成员
+`fw_version_major … usb`）→ 逐条读属性成功。复现命令：
+
+```text
+node tools/odrive_gui_probe.js
+```
+
+它加载 GUI 自带的 `socket.io-client`（浏览器里跑的就是同一份），走
+socket.io → `odrive_server.py` → pyfibre → USB → 固件 的完整链路。
+
+**地址栏变绿 ≠ 找到设备。** 那个绿色只表示浏览器连上了后端服务：
+`GUI/src/views/Start.vue` 把它绑在 `$store.state.serverConnected` 上。设备有没有找到
+是另一回事，不体现在这个颜色里 —— 判断设备要看设备列表/属性是否真的有值。
+
+**设备列表靠事件填充，不是靠轮询。** `GUI/src/store.js` 里：socket `connect` 时才发
+`findODrives`；后端只在**真正发现设备的那一刻**才回 `odrive-found`；前端收到它才去
+`getODrives`。收到 `odrives` 之后，页脚由 `axes`（`getAxes` 从 `odrives` 派生）渲染出
+轴卡片 —— **Start 页本身没有任何设备列表**，设备的体现就是页脚的轴卡片，以及
+Menu → Import/Export ODrive config 里的设备按钮。别在 Start 页等一个列表。
+
+**上游的 `findODrives` 每个进程只能成功一次**（这是"web 端始终没有设备"的真正原因）。
+它的处理器直接调 `start_discovery()`，而后者每次都 `fibre.Domain(...)` 新建并
+`__enter__()` 一个域、**从不释放**上一个：第一次能发现设备（日志 `Found <serial>`），
+之后每次只打印 `starting disco loop...` 却找不到任何东西，因为设备已被同一个进程占住。
+上游只在 electron 里连一次并保持连接，所以永远碰不到这个路径；但浏览器每刷新一次页面
+都会重新发 `findODrives`，而 `odrive-found` 不会再来，页面就永远空着。
+
+`tools/odrive_gui_backend.py` 已经把这个修掉了：以模块方式加载上游文件并重新注册
+`findODrives` 处理器 —— **已经认识的设备直接重播 `odrives-status` + `odrive-found`**，
+只有手里什么都没有时才真正去 discovery。所以刷新页面现在每次都能拿到设备。
+（判断依据：日志里第二次调用打印的是 `findODrives: re-announcing known odrive(s)`，
+而不是又一次 `starting disco loop...`。）
+
+**不要让两个后端同时跑。** Werkzeug 设了 `allow_reuse_address`，Windows 下允许第二个
+进程绑同一个端口：启动**不会报错**，两个进程都在监听，连接通常落到先启动的那个（可能
+是已经卡死的那个），而新起的那个看起来"什么都没做"（日志里连 discovery 都没有）。
+更糟的是两个进程会同时驱动同一个 USB 设备，而 libfibre 的通道不是并发安全的，表现是
+`[USB] Transfer on EP 0x83 still in progress` 加上
+`OSError: exception: access violation`，之后设备彻底失联。
+`tools/odrive_gui_backend.py` 现在启动前会探测 5000 端口，已被占用就直接拒绝启动。
+
+同理，**不要同时用浏览器和 `tools/odrive_gui_probe.js` 访问同一个后端**：官方
+`odrive_server.py` 用的是"先检查后赋值"的自旋标志 `inUse`
+（`while globals()['inUse']: time.sleep(0.1)` 然后 `globals()['inUse'] = True`），
+它**不是真锁**，两个 socketio 处理线程可以同时通过检查，于是并发访问同一个 USB 通道，
+触发上面那种损坏。只用一个客户端时是干净的 —— 本工程实测：完整属性树遍历（约 78 个
+端点）没有任何协议告警。
+
+**烧录或复位之后必须重启后端。** 板子重新枚举时，`odrive_server.py` 手里的设备句柄会
+变成悬空的，而它的 discovery 循环**既不会再报一次"找到设备"，也不会报 "lost odrive"**，
+于是表现成：地址栏还是绿的、但设备列表和属性全是空的。`tools/odrive_gui_probe.js`
+在这个状态下会打印
+`the backend still lists an ODrive but answered none of the property reads`。
+处理办法就是重启后端。
+
+怀疑是板子本身的问题时，先用 `pnputil /enum-devices /connected` 确认 USB 侧其实是好的，
+本板正常的三个节点是：
+
+| Instance ID | 作用 | 驱动 |
+| --- | --- | --- |
+| `USB\VID_1209&PID_0D32&MI_00` | USB CDC → COM6 | `usbser.inf`（Class: Ports） |
+| `USB\VID_1209&PID_0D32` | 复合设备 | `usb.inf` |
+| `USB\VID_1209&PID_0D32&MI_02` | Fibre 厂商接口（libfibre 走这个） | WinUSB（Class: USBDevice） |
+
+三者都应为 `Status: Started`。注意 `Get-PnpDevice` 在受限环境下会**静默返回空列表**
+（`(Get-PnpDevice -PresentOnly).Count` 得到 0），据此判断"设备不存在"会误判，用 `pnputil`。
+
