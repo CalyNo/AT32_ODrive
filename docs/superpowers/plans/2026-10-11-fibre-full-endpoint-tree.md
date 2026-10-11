@@ -431,7 +431,13 @@ static const char s_fibre_json[] =
   "<escaped last member>"
   "]";
 
-#define FIBRE_JSON_LENGTH   ((uint32_t)(sizeof(s_fibre_json) - 1u))
+/* Generated NUMERIC LITERAL, not `sizeof(s_fibre_json) - 1`:
+ * the same generator run that emits the bytes emits this count, so it cannot go
+ * stale, and the conformance test compares it against the length it
+ * reconstructs from the array's literals.  (The `sizeof` form is equally valid
+ * C, but the test's check #4 rejects non-literal macro bodies, so a literal
+ * keeps the Task 2 acceptance gate green.) */
+#define FIBRE_JSON_LENGTH   (<len>u)
 
 /* id -> index into s_params[], or FIBRE_EP_NOT_PARAM.  Index 0 is unused. */
 static const uint16_t s_fibre_ep_index[FIBRE_EP_COUNT + 1u] =
@@ -1010,6 +1016,12 @@ Expected: 无输出、退出码 0。
 `if payload_length > 0` 才记录写（照抄了旧的 `fibre_server.c`）。Step 1 改成**无条件**派发之后，
 sim 也必须无条件调用端点，并区分：载荷长度等于 codec 宽度 → 属性写；载荷长度 0 → 函数调用。
 
+> **与 Task 1 的分工（避免重复劳动与误解）**：Task 1 已经按描述符声明的宽度在 sim 里**建模**了
+> "宽度不对就不写"这条规则，但**故意不计分**（只作为 `model:` 信息行输出）——因为那时该过滤
+> 完全活在测试自己的模型里，对任何固件都不可能失败，计分会让证据虚高。Task 5 这一步的作用是
+> **把模型对齐到 Step 1 的真实行为，并把它提升为计分断言**；同时按 Task 1 的要求，用
+> **与模型无关**的 `writes` 列表来断言"恰好这些字节"，而不是用模型自己的 `property_writes`。
+
 **(b) 补 `0xFFFFFFFF` 的断言。** 模拟 `offset = 0xFFFFFFFF` 的请求，断言设备端口返回 4 字节，
 且其值等于 `(json_crc << 16) | crc16(json_crc, json)`。
 
@@ -1157,6 +1169,25 @@ git commit -m "fix(fibre): 修复 Keil 编译告警"
 git add AGENTS.md docs/odrive_mapping.md docs/architecture.md
 git commit -m "docs: 同步 Fibre 端点树的实现与验证状态"
 ```
+
+---
+
+## 已知延后项（按用户指示暂不处理）
+
+Task 1 的第二轮 spec 复审（对 `15a53bc`）判定"全部 7 条需求已实现且可用"，但列出若干**测试文件自身**的
+质量问题。用户指示**优先实现功能**，故这些**暂不修**，留到最后的整体评审。它们**不阻塞**任何功能实现：
+
+| 编号 | 问题 | 影响 |
+| --- | --- | --- |
+| JC-1 | 宽度断言用的是模型自己的 `property_writes`，对任何固件都不可能失败 | 证据虚高，不阻塞 |
+| JC-2 | CRC 小节印成 `[3]` 而它是需求 5；docstring 里"需求 2 就是测试自身"是事实错误 | 可读性，不阻塞 |
+| N1 | `load_official_protocol()` / `descriptor_bytes_from()` 抛 `SystemExit` 但调用点没接住，聚合摘要被丢 | 只在 ODrive 参照目录缺失/损坏时显现 |
+| N2 | 未知 codec 会抛裸 `TypeError` 而不是可读 FAIL | 只在生成器产出非法 codec 时显现 |
+| N3 | `width == 1` 时负向用例退化成同宽度 → 假 FAIL | 今天不可达（param.c 最小宽度 2） |
+| N5 | 61 字节 clamp 断言无区分力（自指） | 证据弱，不阻塞 |
+
+**已在计划里规避的那一条**：Task 1 的检查 #4 会拒绝非字面量的 `FIBRE_JSON_LENGTH` 宏体，因此
+Task 2 的生成器输出**数值字面量**（见 Task 2 Step 2），无需修改测试或计划即可让验收门保持绿。
 
 ---
 
