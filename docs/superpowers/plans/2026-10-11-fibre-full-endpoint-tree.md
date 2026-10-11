@@ -372,8 +372,14 @@ def parse_param_rows(text):
   顶层每个成员单独序列化后用 `,` 连接，这样生成 C 字面量时可以一行一个、且拼接结果逐字节等于紧凑 JSON；
 - 返回 `(descriptor_bytes, members, id_of_path, index_table, enum_names)`。
 
-`index_table[id]`：param.c 来源的属性 → `r["index"]`；身份端点与函数端点 → `0xFFFF`
-（即 C 里的 `FIBRE_EP_NOT_PARAM`）。
+`index_table[id]`：`param.c` 来源的行（**含 `read_ptr == NULL` 的行，例如 `axis0.clear_errors`**）→
+`r["index"]]`（即 `s_params[]` 内的真实行号）；身份端点与 `save_configuration` → `0xFFFF`
+（C 里的 `FIBRE_EP_NOT_PARAM`）。
+
+> **为什么 `clear_errors` 是例外**：Task 4 的函数分发必须拿到它那一行，才能触发 `param.c` 里
+> `static` 的 `param_on_write_clear_errors()`；写成 `FIBRE_EP_NOT_PARAM` 就拿不到了。
+> Task 4 的分发**先看 `s_fibre_ep_kind[]`** 再决定当属性还是当函数，所以索引表指向真实行
+> 不会把函数误当成属性写。
 
 - [ ] **Step 2: 生成头文件**
 
@@ -480,7 +486,10 @@ Expected: 编号 1–5、7 的断言全 PASS（编号 6 的端到端握手也 PA
 - [ ] **Step 4: 用 `--check` 验证漂移检测真的会失败**
 
 Run: `python tools/gen_fibre_endpoints.py --check` → 期望退出码 0。
-然后手动在 `param.c` 里改一个 `max_value`（不改路径，不改结构），再跑 `--check` → 期望 0（因为只有路径/类型/读写性进描述符，边界值不进）。
+然后手动在 `param.c` 里改一个 `max_value`（不改路径，不改结构），再跑 `--check` →
+**实测会退出 1**，因为表头注释记录了 `param.c` 的整文件 sha256，而边界值改动会改变该哈希
+（描述符字节本身不变，实测 5461 字节 / `cd0ac7e6…` 不变）。这是**保守但安全**的行为：
+宁可多要求一次重新生成，也不放过真正的漂移。若以后嫌吵，可改为只哈希"解析后的规范行"。
 再把某行 `&g_axis.pos_estimate` 临时改成 `NULL` → 期望 `--check` 退出码 1 且报错信息指出该行。
 **改完必须还原。**
 
