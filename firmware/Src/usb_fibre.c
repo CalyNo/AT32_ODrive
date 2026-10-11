@@ -36,7 +36,20 @@ void usb_fibre_poll(void)
     return;
   }
 
-  length = usb_vendor_get_rxdata(&otg_core_struct, s_rx_packet);
+  /*
+   * Pass &otg_core_struct.dev, NOT &otg_core_struct.  The AT32 CDC class casts
+   * this void * argument straight to usbd_core_type * (cdc_class.c:429), and
+   * otg_core_type's first member is the usb_reg pointer (Inc/usb_core.h:90-103),
+   * so handing it the otg struct made class_handler resolve from the wrong
+   * offset.  That looked harmless while the Fibre endpoint was idle -- the bogus
+   * cdc_struct read as "no data" and the call returned early -- but the first
+   * received byte drove the wrong buffer and the wrong udev into
+   * usbd_ept_recv(), faulting the CPU.  With the IWDG armed that fault became a
+   * 200 ms reset loop, which is what "sending any serial byte reboots the board"
+   * was.  usb_cdc.c passes &otg_core_struct.dev to the matching usb_vcp_* calls
+   * for the same reason.
+   */
+  length = usb_vendor_get_rxdata(&otg_core_struct.dev, s_rx_packet);
   if (length > 0u)
   {
     fibre_server_process_packet(s_rx_packet, length);
@@ -50,7 +63,8 @@ bool usb_fibre_send(const uint8_t *data, uint16_t length)
     return false;
   }
 
-  return usb_vendor_send_data(&otg_core_struct,
+  /* Same argument contract as usb_vendor_get_rxdata() above: usbd_core_type *. */
+  return usb_vendor_send_data(&otg_core_struct.dev,
                               (uint8_t *)data,
                               length) == SUCCESS;
 }
