@@ -97,8 +97,12 @@ $(HEX): $(ELF)
 # so a symbol referenced from a section that GCC would garbage-collect still has
 # to resolve -- the CDC class's usb_delay_ms() hook was exactly that case.
 # This target mirrors the Keil behaviour and fails on any undefined symbol.
+#
+# check-fibre is a prerequisite so the documented verification flow runs the
+# descriptor drift guard too: a stale Inc/fibre_endpoints_generated.h is not a
+# link error, it only makes every Fibre request fail silently on the board.
 .PHONY: check-link
-check-link: $(OBJS) $(LDSCRIPT)
+check-link: check-fibre $(OBJS) $(LDSCRIPT)
 	@mkdir -p $(dir $(ELF))
 	$(CC) $(CPU_FLAGS) -T$(LDSCRIPT) -Wl,--no-warn-rwx-segments \
 		--specs=nano.specs --specs=nosys.specs \

@@ -8,6 +8,14 @@ dashboard expectations.
 
 Usage:  python tools/fibre_conformance.py
 
+The upstream ODrive clone this test reads (the official fibre.protocol module
+and the GUI tuning dashboard) is located by the ODRIVE_REF environment
+variable, falling back to the sibling directory ../ODrive.  When that clone is
+absent the run still prints the aggregated RESULT summary and exits non-zero:
+checks that only involve this repo keep their verdict, and every check that
+needs the clone is reported as failed (the clone is never a reason to lose the
+summary).
+
 Exit code 0 means every check passed.  Any failure (including a missing
 generator or a missing generated header) exits non-zero with a readable message
 instead of an import traceback (SystemExit is used for blocking input problems).
@@ -52,13 +60,20 @@ and the sentinel are properties of fibre_server.c itself.
 """
 
 import json
+import os
 import re
 import struct
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-ODRIVE = Path(r"D:\1-myproject\AT32_ODrive\ODrive")
+# The upstream ODrive clone is a read-only reference for the official fibre
+# implementation and for the GUI dashboards.  It is NOT part of this repo, so its
+# location is configuration, not a constant: ODRIVE_REF overrides it, and the
+# default is the sibling directory next to this repo (../ODrive), which is the
+# layout the reference clone is kept in here.  Nothing about it is machine
+# specific beyond that default.
+ODRIVE = Path(os.environ.get("ODRIVE_REF") or (ROOT.parent / "ODrive"))
 PARAM_C = ROOT / "firmware" / "Src" / "param.c"
 GENERATED_H = ROOT / "firmware" / "Inc" / "fibre_endpoints_generated.h"
 TUNING_DASHBOARD = ODRIVE / "GUI" / "src" / "assets" / "dashboards" / "Tuning_0_5_1.json"
@@ -192,15 +207,24 @@ def firmware_crc16(crc, data):
 
 
 def load_official_protocol():
-    """Import the genuine ODrive host implementation (read-only reference)."""
+    """Import the genuine ODrive host implementation (read-only reference).
+
+    Returns None after reporting the failure when the reference clone is absent
+    or does not contain the package: the callers then report the checks that
+    depend on it as failed, while every check that does not need it still runs
+    and the run still ends in the aggregated RESULT summary.
+    """
     pkg = ODRIVE / "tools" / "odrive" / "pyfibre"
     if not pkg.is_dir():
-        raise SystemExit("FAIL: official pyfibre package not found at %s" % pkg)
+        if not ODRIVE.is_dir():
+            return None      # main() has already failed on the missing clone
+        return fail("official pyfibre package not found at %s (set ODRIVE_REF to "
+                    "the ODrive reference clone, or place it next to this repo)" % pkg)
     sys.path.insert(0, str(pkg))
     try:
         import fibre.protocol as protocol
     except Exception as exc:                                  # pragma: no cover
-        raise SystemExit("FAIL: could not import fibre.protocol from %s (%r)" % (pkg, exc))
+        return fail("could not import fibre.protocol from %s (%r)" % (pkg, exc))
     return protocol
 
 
@@ -472,12 +496,18 @@ def main():
     print("AT32_ODrive Fibre descriptor conformance")
     print("=" * 78)
     print("firmware : %s" % ROOT)
-    print("official : %s" % ODRIVE)
+    print("official : %s%s"
+          % (ODRIVE, "" if ODRIVE.is_dir() else "   <- MISSING (set ODRIVE_REF)"))
     print()
 
+    # A missing reference clone is reported through the same fail()/finish()
+    # path as every other input problem, so the run still ends in the aggregated
+    # RESULT summary and a non-zero exit.  Raising SystemExit here (as this used
+    # to) printed one line and lost the summary of everything that did run.
     if not ODRIVE.is_dir():
-        raise SystemExit("FAIL: official ODrive reference clone not found at %s "
-                         "(read-only reference; do not modify)" % ODRIVE)
+        fail("official ODrive reference clone not found at %s (read-only "
+             "reference; do not modify).  Set ODRIVE_REF to its location; the "
+             "checks that need it are reported as failed below." % ODRIVE)
 
     # ------------------------------------------------------------------
     print("[inputs] generator + generated header")
@@ -514,9 +544,11 @@ def main():
     check("s_fibre_json matches the re-parse of param.c byte for byte", same,
           "" if same else describe_first_difference(expected, committed))
 
-    # The device serves `sizeof(s_fibre_json) - 1` bytes, and the host sizes its
-    # read loop from FIBRE_JSON_LENGTH, so a disagreement silently truncates the
-    # descriptor (the host would then hash a prefix and reject every request).
+    # The device reports its descriptor length through the generated numeric
+    # literal FIBRE_JSON_LENGTH (no longer `sizeof(s_fibre_json) - 1`), and the
+    # host sizes its read loop from that same value, so a disagreement silently
+    # truncates the descriptor (the host would then hash a prefix and reject
+    # every request).
     length_macro = re.search(r"#define\s+FIBRE_JSON_LENGTH\s+(.+)", header_text)
     if length_macro is None:
         check("FIBRE_JSON_LENGTH == len(descriptor)", False,
@@ -600,27 +632,38 @@ def main():
 
     protocol = load_official_protocol()
 
-    # docs/protocol.rst:106-108 vectors, initial value 0x1337.
+    # docs/protocol.rst:106-108 vectors, initial value 0x1337.  The firmware port
+    # is held against the documented vectors whether or not the official module
+    # is available; the official leg is added when it is.
     ok = True
     for data, expect in ((b"\x01\x02\x03\x04", 0x672E), (b"\x05\x04\x03\x02\x01", 0xE251)):
         fw = firmware_crc16(CRC16_INIT, data)
-        official = protocol.calc_crc16(CRC16_INIT, data)
-        good = (fw == expect == official)
+        official = protocol.calc_crc16(CRC16_INIT, data) if protocol is not None else None
+        good = fw == expect and (official is None or official == expect)
         ok = ok and good
         check("protocol.rst vector %s -> 0x%04X" % (data.hex(), expect), good,
-              "firmware port=0x%04X official=0x%04X" % (fw, official))
+              "firmware port=0x%04X official=%s"
+              % (fw, "n/a (no official clone)" if official is None else "0x%04X" % official))
 
     probe = bytes(range(0, 64))
     fw = firmware_crc16(CRC16_INIT, probe)
-    official = protocol.calc_crc16(CRC16_INIT, probe)
-    check("firmware port == official calc_crc16 over 0x00..0x3F", fw == official,
-          "firmware=0x%04X official=0x%04X" % (fw, official))
+    if protocol is None:
+        check("firmware port == official calc_crc16 over 0x00..0x3F", False,
+              "official module unavailable: needs the ODrive reference clone")
+    else:
+        official = protocol.calc_crc16(CRC16_INIT, probe)
+        check("firmware port == official calc_crc16 over 0x00..0x3F", fw == official,
+              "firmware=0x%04X official=0x%04X" % (fw, official))
 
     json_crc = firmware_crc16(PROTOCOL_VERSION, committed)
-    official_crc = protocol.calc_crc16(PROTOCOL_VERSION, committed)
     print("        json_crc(poly 0x3D65, init 1) = 0x%04X" % json_crc)
-    check("firmware port == official calc_crc16 for the descriptor", json_crc == official_crc,
-          "firmware=0x%04X official=0x%04X" % (json_crc, official_crc))
+    if protocol is None:
+        check("firmware port == official calc_crc16 for the descriptor", False,
+              "official module unavailable: needs the ODrive reference clone")
+    else:
+        official_crc = protocol.calc_crc16(PROTOCOL_VERSION, committed)
+        check("firmware port == official calc_crc16 for the descriptor", json_crc == official_crc,
+              "firmware=0x%04X official=0x%04X" % (json_crc, official_crc))
 
     m = re.search(r"json\s+crc\s*:\s*0x([0-9A-Fa-f]+)", header_text)
     check("generated header records the same json_crc",
@@ -666,10 +709,18 @@ def main():
     check("descriptor retrieved complete", got == committed,
           "got %s bytes" % (len(got) if got is not None else "None"))
 
-    client.interface_definition_crc = protocol.calc_crc16(PROTOCOL_VERSION, got or b"")
-    check("client json_crc == the firmware's expected trailer",
-          client.interface_definition_crc == device.json_crc,
-          "client=0x%04X firmware=0x%04X" % (client.interface_definition_crc, device.json_crc))
+    if protocol is None:
+        # No official module, so the client's hash cannot be obtained from it.
+        # Computing it with the firmware port instead would make the comparison
+        # below self-referential, so it is reported as failed.
+        check("client json_crc == the firmware's expected trailer", False,
+              "official module unavailable: needs the ODrive reference clone")
+    else:
+        client.interface_definition_crc = protocol.calc_crc16(PROTOCOL_VERSION, got or b"")
+        check("client json_crc == the firmware's expected trailer",
+              client.interface_definition_crc == device.json_crc,
+              "client=0x%04X firmware=0x%04X"
+              % (client.interface_definition_crc, device.json_crc))
     check("no unexpected ACK along the way", client.unexpected == 0,
           "%d unexpected" % client.unexpected)
 
@@ -738,10 +789,18 @@ def main():
         writer.interface_definition_crc = writing_device.json_crc
 
         writer.remote_endpoint_operation(write_id, payload, True, 0)
+        # Assert against `writes`, not against `property_writes`.  `writes` is
+        # what the packet server handed to the endpoint layer, so this compares
+        # the wire traffic with the payload that was actually sent -- exact bytes,
+        # not just a length.  `property_writes` is the simulator's own width
+        # filter applied to its own recording; comparing that list with the
+        # payload the test itself offered can only re-state the model's rule and
+        # would pass for any firmware, which is not evidence about the C
+        # dispatcher (see the NOTE below).
         check("write of %s (id %d, %s) delivers exactly its %d payload bytes"
               % (write_path, write_id, write_entry["type"], width),
-              writing_device.property_writes == [(write_id, payload)],
-              "recorded %r, expected %r" % (writing_device.property_writes, [(write_id, payload)]))
+              writing_device.writes == [(write_id, payload)],
+              "recorded %r, expected %r" % (writing_device.writes, [(write_id, payload)]))
 
         # Regression guard for the exact off-by-two the responder caught: the
         # last 2 request bytes are the trailer and must not reach the endpoint.
