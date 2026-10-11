@@ -10,7 +10,25 @@ Usage:  python tools/fibre_conformance.py
 
 Exit code 0 means every check passed.  Any failure (including a missing
 generator or a missing generated header) exits non-zero with a readable message
-instead of an import traceback.
+instead of an import traceback (SystemExit is used for blocking input problems).
+
+Printed sections are numbered to match the implementation plan's requirement
+numbers, so output maps 1:1 onto the plan:
+
+  [inputs]                        generator + generated header present
+  [1] independent re-parse of param.c, byte-for-byte equal to the committed
+      s_fibre_json[] (requirement 1 + 3)
+  [3] CRC-16 three-way agreement: official module, protocol.rst vectors, the
+      firmware algorithm ported from crc.c (requirement 5)
+  [4] descriptor structure: valid JSON, top-level list, ids unique and 1..N,
+      codec whitelist, identity endpoints present at the root (requirement 4)
+  [6] descriptor read handshake: firmware packet server port driven by the
+      official client's read loop (requirement 6)
+  [7] official GUI Tuning dashboard paths all resolve (requirement 7)
+  [extra] checks that are not among the seven requirements
+
+Requirement 2 is "the test itself", so it has no runtime section of its own;
+"not covered" below is where it would be noted.
 
 Scope of the evidence: `param.c` is parsed through the generator module (there is
 exactly one parser in this repo, so this check catches a stale or hand-edited
@@ -18,6 +36,12 @@ header, not a wrong parser); the CRC and the descriptor handshake are checked
 against the genuine ODrive host implementation; the packet server is a
 line-by-line port of firmware/Src/fibre_server.c.  Nothing here runs on a board,
 so USB enumeration and timing are out of scope.
+
+NOT COVERED HERE, BY DESIGN: function-endpoint dispatch (both the zero-argument
+call path and the "always dispatch, even an empty payload" fix in
+fibre_server.c:111-114) is added together with the server fix in Task 5.  The
+simulator below still models the pre-fix `payload_length > 0` gate, so it does
+not pretend to cover zero-length function calls.
 """
 
 import json
@@ -43,8 +67,15 @@ KNOWN_CODECS = frozenset([
     "int32", "uint32", "int64", "uint64", "float",
 ])
 
+# Wire width of each codec, in bytes.  A property's response must be exactly this
+# long: the host parses the tree from the declared codec, so a short or long
+# answer shifts every following field.
+CODEC_WIDTH = {"bool": 1, "int8": 1, "uint8": 1, "int16": 2, "uint16": 2,
+               "int32": 4, "uint32": 4, "int64": 8, "uint64": 8, "float": 4}
+
 # Board identity endpoints that have no s_params[] row, so only an explicit
-# table in the generator can keep them alive (design doc §4.3.1).
+# table in the generator can keep them alive (design doc §4.3.1).  They must sit
+# at the ROOT of the tree, exactly as the official descriptor has them.
 IDENTITY_ENDPOINTS = ("fw_version_revision",
                       "hw_version_major",
                       "hw_version_minor",
@@ -68,9 +99,10 @@ def check(name, ok, detail=""):
 
 
 def fail(message):
-    """Report a blocking, non-assertion problem (missing input file, API drift)."""
+    """Report a blocking problem.  Returns None, so callers must stop the section."""
     RESULTS.append((message, False, ""))
     print("  FAIL  " + message)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -78,21 +110,23 @@ def fail(message):
 # ---------------------------------------------------------------------------
 
 def load_generator():
-    """The generator lands in Task 2.  Until then this test must fail with a
-    readable message rather than an import traceback."""
+    """Import the generator (created in Task 2) and pin the API this test needs.
+
+    A missing generator, or one that does not expose the two functions agreed
+    with this test, is a blocking condition: raise SystemExit so `main()` reports
+    it as a failure instead of letting an ImportError traceback escape.
+    """
     sys.path.insert(0, str(ROOT / "tools"))
     try:
         import gen_fibre_endpoints as gen
     except ImportError as exc:
-        fail("tools/gen_fibre_endpoints.py is not importable yet (%s)" % exc)
-        return None
+        raise SystemExit("tools/gen_fibre_endpoints.py is not importable yet (%s)" % exc)
 
     missing = [name for name in ("parse_param_rows", "build_descriptor")
                if not callable(getattr(gen, name, None))]
     if missing:
-        fail("tools/gen_fibre_endpoints.py does not export %s; the generator and "
-             "this test have drifted apart" % ", ".join(missing))
-        return None
+        raise SystemExit("tools/gen_fibre_endpoints.py does not export %s; the "
+                         "generator and this test have drifted apart" % ", ".join(missing))
 
     return gen
 
@@ -101,7 +135,7 @@ def report_missing_inputs():
     absent = [p for p in (PARAM_C, GENERATED_H) if not p.is_file()]
     for path in absent:
         fail("required input missing: %s" % path)
-    return not absent
+    return None if absent else True
 
 
 def c_string_literals_to_bytes(text, symbol):
@@ -112,6 +146,29 @@ def c_string_literals_to_bytes(text, symbol):
     lits = re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1))
     raw = "".join(lits)
     return raw.replace('\\"', '"').replace("\\\\", "\\").encode("ascii")
+
+
+def descriptor_bytes_from(built):
+    """Normalise build_descriptor()'s return value to bytes.
+
+    The plan does not pin this contract, so accept the documented tuple (whose
+    first element is the descriptor) or the descriptor itself as bytes/str.  Any
+    other shape is reported as a readable failure: passing a dict through to the
+    byte comparison would surface as a KeyError traceback instead.
+    """
+    if isinstance(built, tuple):
+        if not built:
+            raise SystemExit("build_descriptor() returned an empty tuple; "
+                             "expected the descriptor bytes first")
+        built = built[0]
+
+    if isinstance(built, bytes):
+        return built
+    if isinstance(built, str):
+        return built.encode("ascii")
+
+    raise SystemExit("build_descriptor() returned %s; expected bytes, str, or a "
+                     "tuple whose first element is one of those" % type(built).__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -131,14 +188,12 @@ def load_official_protocol():
     """Import the genuine ODrive host implementation (read-only reference)."""
     pkg = ODRIVE / "tools" / "odrive" / "pyfibre"
     if not pkg.is_dir():
-        fail("official pyfibre package not found at %s" % pkg)
-        return None
+        raise SystemExit("FAIL: official pyfibre package not found at %s" % pkg)
     sys.path.insert(0, str(pkg))
     try:
         import fibre.protocol as protocol
     except Exception as exc:                                  # pragma: no cover
-        fail("could not import fibre.protocol from %s (%r)" % (pkg, exc))
-        return None
+        raise SystemExit("FAIL: could not import fibre.protocol from %s (%r)" % (pkg, exc))
     return protocol
 
 
@@ -149,12 +204,17 @@ def load_official_protocol():
 class FirmwareSim:
     """Port of the AT32 firmware's Fibre packet server."""
 
-    def __init__(self, json_bytes, scalar_reads):
+    def __init__(self, json_bytes, scalar_reads, property_widths=None):
         self.json = json_bytes
         self.json_crc = firmware_crc16(1, json_bytes)   # fibre_server_init(): crc16_update(1u, ...)
         self.scalar_reads = scalar_reads                # endpoint_id -> bytes it would return
-        self.writes = []                                # (endpoint_id, payload) recorded
+        self.writes = []                                # (endpoint_id, payload) that reached fibre_endpoint_write()
+        self.property_writes = []                       # as above, but only payloads of the declared width
         self.sent = []                                  # responses actually emitted
+        # Declared codec width per endpoint, taken from the SAME descriptor the
+        # host builds its tree from.  Still a model of the Task 4 dispatcher, not
+        # a verification of it (see property_writes below).
+        self.property_widths = property_widths or {}
 
     def process_packet(self, packet):
         """Returns the response bytes, or None (fibre_server.c:42-136)."""
@@ -167,8 +227,10 @@ class FirmwareSim:
         trailer = struct.unpack_from("<H", packet, len(packet) - 2)[0]
 
         endpoint_id = endpoint_field & 0x7FFF              # line 64
-        payload = packet[6:]
+        # The last two bytes of every request are the trailer (line 62, 73), so
+        # they are NOT payload: C bounds the payload with payload_length.
         payload_length = len(packet) - FIBRE_MIN_REQUEST_LENGTH
+        payload = packet[6:6 + payload_length]
 
         expected_trailer = FIBRE_PROTOCOL_VERSION if endpoint_id == 0 else self.json_crc
         if trailer != expected_trailer:
@@ -189,8 +251,16 @@ class FirmwareSim:
                 return self._maybe_send(endpoint_field, seq_no, response, response_length)
             return self._maybe_send(endpoint_field, seq_no, response, response_length)
         else:
+            # Pre-Task-5 shape: fibre_endpoint_write() is only called when the
+            # payload is non-empty (fibre_server.c:111-114).
             if payload_length > 0:
                 self.writes.append((endpoint_id, bytes(payload)))
+                # A property is written only when the payload carries exactly its
+                # codec width (design §4.5).  This mirrors the Task 4 dispatcher
+                # so that width-sensitive assertions have something faithful to
+                # compare against; the dispatcher itself is verified in Task 4.
+                if payload_length == self.property_widths.get(endpoint_id):
+                    self.property_writes.append((endpoint_id, bytes(payload)))
             if output_length > 0:
                 max_length = min(output_length, FIBRE_MAX_RESPONSE_DATA)
                 data = self.scalar_reads.get(endpoint_id, b"")   # default: 0 consumed
@@ -219,7 +289,6 @@ class OfficialClient:
         self.device = device
         self.seq = 0
         self.interface_definition_crc = 0   # set after the descriptor is read
-        self.responses = {}
         self.unexpected = 0
 
     def remote_endpoint_operation(self, endpoint_id, input_bytes, expect_ack, output_length):
@@ -269,19 +338,24 @@ class OfficialClient:
 # Descriptor inspection helpers
 # ---------------------------------------------------------------------------
 
-def flatten_tree(top):
-    """Split a descriptor tree into object paths and leaf members.
+def walk_tree(top):
+    """Flatten a descriptor tree into (objects, properties, functions, by_name).
 
-    A leaf is either a property (with a codec `type` and an `id`) or a function
+    A leaf is either a property (a codec `type` and an `id`) or a function
     (`type` == "function", no codec).  Both are addressable by the host, but only
-    properties have a codec to validate.
+    properties have a codec to validate.  `by_name` maps a full dotted path to
+    the member dict, which is how endpoint ids are resolved without ever
+    hard-coding a number.
     """
     objects, props, funcs = [], [], []
+    by_name = {}
 
     def walk(nodes, prefix):
         for entry in nodes:
             name = entry.get("name")
             path = name if not prefix else prefix + "." + name
+            if isinstance(name, str):
+                by_name[path] = entry
             if entry.get("type") == "object":
                 objects.append(path)
                 walk(entry.get("members", []), path)
@@ -292,7 +366,7 @@ def flatten_tree(top):
 
     if isinstance(top, list):
         walk(top, "")
-    return objects, props, funcs
+    return objects, props, funcs, by_name
 
 
 def iter_members(top):
@@ -309,6 +383,30 @@ def iter_members(top):
             yield entry
 
 
+def first_property(by_name, want_writable=None, want_readable=None, want_codec=None):
+    """Resolve a property by its declared capabilities, never by a literal id.
+
+    Generated ids follow s_params[] table order, so any hard-coded number here
+    would silently point at a different property after a param.c edit.
+    """
+    for path, entry in by_name.items():
+        if entry.get("type") in (None, "object", "function"):
+            continue
+        if want_codec is not None and entry.get("type") != want_codec:
+            continue
+        access = entry.get("access") or ""
+        if want_writable is not None and (access == "rw") != want_writable:
+            continue
+        if want_readable is not None and ("r" in access) != want_readable:
+            continue
+        return path, entry
+    return None, None
+
+
+def codec_width_of(entry):
+    return CODEC_WIDTH.get(entry.get("type"))
+
+
 def main():
     print("=" * 78)
     print("AT32_ODrive Fibre descriptor conformance")
@@ -322,8 +420,14 @@ def main():
                          "(read-only reference; do not modify)" % ODRIVE)
 
     # ------------------------------------------------------------------
-    print("[1] Inputs")
-    gen = load_generator()
+    print("[inputs] generator + generated header")
+    # Report every missing input, not just the first one: while the generator is
+    # absent the header is absent too, and one aggregated failure list is what
+    # makes this readable at the TDD stage.
+    try:
+        gen = load_generator()
+    except SystemExit as exc:
+        gen = fail(str(exc))
     report_missing_inputs()
     if gen is None or not all(p.is_file() for p in (PARAM_C, GENERATED_H)):
         print()
@@ -333,44 +437,11 @@ def main():
 
     # ------------------------------------------------------------------
     print()
-    print("[2] CRC-16 agreement with the official implementation")
-
-    protocol = load_official_protocol()
-    if protocol is None:
-        return finish()
-
-    # docs/protocol.rst:106-108 vectors, initial value 0x1337.
-    ok = True
-    for data, expect in ((b"\x01\x02\x03\x04", 0x672E), (b"\x05\x04\x03\x02\x01", 0xE251)):
-        fw = firmware_crc16(CRC16_INIT, data)
-        official = protocol.calc_crc16(CRC16_INIT, data)
-        good = (fw == expect == official)
-        ok = ok and good
-        check("protocol.rst vector %s -> 0x%04X" % (data.hex(), expect), good,
-              "firmware port=0x%04X official=0x%04X" % (fw, official))
-
-    probe = bytes(range(0, 64))
-    fw = firmware_crc16(CRC16_INIT, probe)
-    official = protocol.calc_crc16(CRC16_INIT, probe)
-    check("firmware port == official calc_crc16 over 0x00..0x3F", fw == official,
-          "firmware=0x%04X official=0x%04X" % (fw, official))
-    if not ok:
-        print()
-        print("      The CRC used for the descriptor trailer is wrong; every host "
-              "request would be dropped.")
-
-    # ------------------------------------------------------------------
-    print()
-    print("[3] Descriptor bytes: independent re-parse vs the committed header")
+    print("[1] Descriptor bytes: independent re-parse vs the committed header")
 
     param_text = PARAM_C.read_text(encoding="utf-8")
     rows = gen.parse_param_rows(param_text)
-    built = gen.build_descriptor(rows)
-    # The generator returns a tuple whose later elements are unused here; only
-    # the descriptor bytes are compared, so the rest of the contract is free.
-    expected = built[0] if isinstance(built, tuple) else built
-    if isinstance(expected, str):
-        expected = expected.encode("ascii")
+    expected = descriptor_bytes_from(gen.build_descriptor(rows))
 
     header_text = GENERATED_H.read_text(encoding="utf-8")
     committed = c_string_literals_to_bytes(header_text, "s_fibre_json")
@@ -383,6 +454,25 @@ def main():
     check("s_fibre_json matches the re-parse of param.c byte for byte", same,
           "" if same else describe_first_difference(expected, committed))
 
+    # The device serves `sizeof(s_fibre_json) - 1` bytes, and the host sizes its
+    # read loop from FIBRE_JSON_LENGTH, so a disagreement silently truncates the
+    # descriptor (the host would then hash a prefix and reject every request).
+    length_macro = re.search(r"#define\s+FIBRE_JSON_LENGTH\s+(.+)", header_text)
+    if length_macro is None:
+        check("FIBRE_JSON_LENGTH == len(descriptor)", False,
+              "no #define FIBRE_JSON_LENGTH in the generated header")
+    else:
+        expression = length_macro.group(1).split("/*")[0].strip()
+        literal = re.fullmatch(r"\(?\(?(?:uint32_t\)?)?\(?\s*(\d+)\s*u?\s*\)?\)?", expression)
+        if literal is None:
+            check("FIBRE_JSON_LENGTH == len(descriptor)", False,
+                  "expected a numeric literal, got %r -- sizeof() cannot be checked "
+                  "against the reconstructed byte count" % expression)
+        else:
+            declared = int(literal.group(1))
+            check("FIBRE_JSON_LENGTH == len(descriptor)", declared == len(committed),
+                  "macro says %d, descriptor is %d bytes" % (declared, len(committed)))
+
     # ------------------------------------------------------------------
     print()
     print("[4] Descriptor structure")
@@ -394,15 +484,14 @@ def main():
         return finish()
     check("descriptor is valid JSON", True)
     check("descriptor is pure ASCII with no NUL byte",
-          all(b < 0x80 for b in committed) and b"\x00" not in committed,
-          "the device serves sizeof(s_fibre_json) - 1 bytes")
+          all(b < 0x80 for b in committed) and b"\x00" not in committed)
 
     check("top level is a list", isinstance(top, list),
           "got %s" % type(top).__name__)
     if not isinstance(top, list):
         return finish()
 
-    objects, paths, functions = flatten_tree(top)
+    objects, paths, functions, by_name = walk_tree(top)
     leaves = paths + functions
     ids = [e["id"] for e in iter_members(top) if "id" in e]
     check("root is not empty", len(top) > 0,
@@ -434,18 +523,38 @@ def main():
     check("every property codec is in the official whitelist", not unknown,
           ("unknown: %s" % unknown) if unknown else "used: %s" % ", ".join(sorted(codecs)))
 
-    missing_identity = [name for name in IDENTITY_ENDPOINTS
-                        if name not in [p.split(".")[-1] for p in leaves]]
-    check("identity endpoints survive the param.c-driven generation", not missing_identity,
-          ("missing: %s" % missing_identity) if missing_identity
+    # Root-level only: a nested axis0.config.serial_number must NOT satisfy this,
+    # because the host looks these up at the root of the tree.
+    root_leaf_names = [e.get("name") for e in top if e.get("type") != "object"]
+    missing_identity = [name for name in IDENTITY_ENDPOINTS if name not in root_leaf_names]
+    check("root-level identity endpoints present", not missing_identity,
+          ("missing at root: %s" % missing_identity) if missing_identity
           else ", ".join(IDENTITY_ENDPOINTS))
 
-    check("fw_version_major / fw_version_minor present",
-          "fw_version_major" in leaves and "fw_version_minor" in leaves)
+    check("fw_version_major / fw_version_minor present at root",
+          "fw_version_major" in root_leaf_names and "fw_version_minor" in root_leaf_names)
 
     # ------------------------------------------------------------------
     print()
-    print("[5] Descriptor CRC")
+    print("[3] CRC-16: official module vs protocol.rst vectors vs the firmware algorithm")
+
+    protocol = load_official_protocol()
+
+    # docs/protocol.rst:106-108 vectors, initial value 0x1337.
+    ok = True
+    for data, expect in ((b"\x01\x02\x03\x04", 0x672E), (b"\x05\x04\x03\x02\x01", 0xE251)):
+        fw = firmware_crc16(CRC16_INIT, data)
+        official = protocol.calc_crc16(CRC16_INIT, data)
+        good = (fw == expect == official)
+        ok = ok and good
+        check("protocol.rst vector %s -> 0x%04X" % (data.hex(), expect), good,
+              "firmware port=0x%04X official=0x%04X" % (fw, official))
+
+    probe = bytes(range(0, 64))
+    fw = firmware_crc16(CRC16_INIT, probe)
+    official = protocol.calc_crc16(CRC16_INIT, probe)
+    check("firmware port == official calc_crc16 over 0x00..0x3F", fw == official,
+          "firmware=0x%04X official=0x%04X" % (fw, official))
 
     json_crc = firmware_crc16(PROTOCOL_VERSION, committed)
     official_crc = protocol.calc_crc16(PROTOCOL_VERSION, committed)
@@ -454,15 +563,24 @@ def main():
           "firmware=0x%04X official=0x%04X" % (json_crc, official_crc))
 
     m = re.search(r"json\s+crc\s*:\s*0x([0-9A-Fa-f]+)", header_text)
-    check("generated header records the same json_crc", m is not None and int(m.group(1), 16) == json_crc,
+    check("generated header records the same json_crc",
+          m is not None and int(m.group(1), 16) == json_crc,
           ("header 0x%04X vs computed 0x%04X" % (int(m.group(1), 16), json_crc)) if m
           else "no 'json crc : 0x....' line in the generated header")
+
+    if not ok:
+        print()
+        print("      The CRC used for the descriptor trailer is wrong; every host "
+              "request would be dropped.")
 
     # ------------------------------------------------------------------
     print()
     print("[6] Descriptor read handshake (official read loop vs firmware packet server)")
 
-    device = FirmwareSim(committed, scalar_reads={})
+    property_widths = {entry["id"]: codec_width_of(entry) for entry in by_name.values()
+                       if "id" in entry and entry.get("type") not in (None, "object", "function")}
+
+    device = FirmwareSim(committed, scalar_reads={}, property_widths=property_widths)
     client = OfficialClient(device)
 
     got = client.remote_endpoint_read_buffer(0)
@@ -475,9 +593,12 @@ def main():
           "client=0x%04X firmware=0x%04X" % (client.interface_definition_crc, device.json_crc))
     check("no unexpected ACK along the way", client.unexpected == 0,
           "%d unexpected" % client.unexpected)
-    check("every response stayed within the 61-byte clamp",
-          all(len(r) - 2 <= FIBRE_MAX_RESPONSE_DATA for r in device.sent),
-          "%d round trips" % len(device.sent))
+
+    # The client asks for 512 bytes per chunk while the descriptor is far longer,
+    # so a complete read proves the 61-byte server clamp is in effect.
+    check("descriptor needed more round trips than the 61-byte clamp allows",
+          len(committed) > FIBRE_MAX_RESPONSE_DATA and len(device.sent) > 1,
+          "%d bytes over %d round trips" % (len(committed), len(device.sent)))
 
     # A host whose descriptor hashed differently must be ignored, not answered
     # with a tree it does not agree on.
@@ -485,6 +606,72 @@ def main():
     bogus.interface_definition_crc = (device.json_crc ^ 0x0001) & 0xFFFF
     check("request with a mismatched json_crc is silently dropped",
           bogus.remote_endpoint_operation(1, b"", True, 4) is None)
+
+    # ------------------------------------------------------------------
+    print()
+    print("[extra] Non-zero-endpoint traffic, endpoint resolved by NAME")
+
+    read_path, read_entry = first_property(by_name, want_readable=True, want_codec="float")
+    if read_path is None:
+        check("a readable float property exists", False, "no readable float property in the tree")
+    else:
+        read_id = read_entry["id"]
+        width = codec_width_of(read_entry)
+        reading_device = FirmwareSim(committed, scalar_reads={read_id: b"\x00\x00\x80\x3F"},
+                                     property_widths=property_widths)
+        reader = OfficialClient(reading_device)
+        reader.interface_definition_crc = reading_device.json_crc
+        answer = reader.remote_endpoint_operation(read_id, b"", True, width)
+        check("read of %s (id %d, %s) returns its declared width"
+              % (read_path, read_id, read_entry["type"]),
+              answer is not None and len(answer) == width,
+              "got %s bytes, expected %d" % (len(answer) if answer is not None else None, width))
+
+    write_path, write_entry = first_property(by_name, want_writable=True)
+    if write_path is None:
+        check("a writable property exists to write", False, "no rw property in the tree")
+    else:
+        write_id = write_entry["id"]
+        width = codec_width_of(write_entry)
+        payload = bytes([0xA5, 0x00, 0xFF, 0x12, 0x34, 0x56, 0x78, 0x9A])[:width]
+
+        writing_device = FirmwareSim(committed, scalar_reads={},
+                                     property_widths=property_widths)
+        writer = OfficialClient(writing_device)
+        writer.interface_definition_crc = writing_device.json_crc
+
+        writer.remote_endpoint_operation(write_id, payload, True, 0)
+        check("write of %s (id %d, %s) delivers exactly its %d payload bytes"
+              % (write_path, write_id, write_entry["type"], width),
+              writing_device.property_writes == [(write_id, payload)],
+              "recorded %r, expected %r" % (writing_device.property_writes, [(write_id, payload)]))
+
+        # Regression guard for the exact off-by-two the responder caught: the
+        # last 2 request bytes are the trailer and must not reach the endpoint.
+        lengths = {endpoint_id: len(recorded) for endpoint_id, recorded in writing_device.writes}
+        extra = {i: n - width for i, n in lengths.items() if n != width}
+        check("the 2-byte request trailer is not part of the payload",
+              not extra and lengths == {write_id: width},
+              "recorded lengths %r (declared width %d, trailer is 2 bytes)"
+              % (lengths, width))
+
+        short_payload = payload[:max(1, width - 1)]
+        short_device = FirmwareSim(committed, scalar_reads={},
+                                   property_widths=property_widths)
+        short_writer = OfficialClient(short_device)
+        short_writer.interface_definition_crc = short_device.json_crc
+        short_writer.remote_endpoint_operation(write_id, short_payload, True, 0)
+        check("a payload that is not the declared width is not written",
+              short_device.property_writes == [],
+              "a %d-byte payload against a %d-byte codec: %r"
+              % (len(short_payload), width, short_device.property_writes))
+
+        # What this section does and does not prove, so nobody over-trusts it:
+        # the wire traffic is model-independent (fibre_server.c:111-114), but the
+        # width acceptance rule lives in fibre_endpoint_write() and is modelled
+        # here from the descriptor's own declaration -- it is verified in Task 4.
+        print("        NOTE: width acceptance is modelled from the descriptor "
+              "(Task 4 verifies the dispatcher)")
 
     # ------------------------------------------------------------------
     print()
