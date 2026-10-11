@@ -191,6 +191,12 @@ param_result_t param_write_entry(const param_entry_t *entry, float value);
 - 生成表里的哨兵 `FIBRE_EP_NOT_PARAM`（身份端点，见 4.3.1）交给手写的 `fibre_identity_read()`。
 - 未知 id、非法长度一律返回 0 字节（保持现有语义）。
 
+**必须同时修掉的一个分发陷阱**：`fibre_server.c:111-114` 目前是
+`if (payload_length > 0u) { fibre_endpoint_write(...); }`。零参数函数端点的载荷长度**就是 0**，
+所以照这个条件 `save_configuration` 会被静默跳过、永远不会执行（现象是"点了没反应"）。
+改为**无条件**把载荷交给端点，由端点自己按"载荷长度是否等于该端点的 codec 宽度"决定：
+属性端点长度不匹配就当作读操作不写入，函数端点要求长度为 0 才执行。
+
 ### 4.6 补齐 spec 缺口
 
 `fibre_server.c` 的 endpoint 0 分支增加：`offset == 0xFFFFFFFF` 时返回
