@@ -75,4 +75,32 @@ bool param_save_configuration(void);
  */
 param_result_t param_write_value(const char *path, float value);
 
+/*
+ * Structured read result.  The Fibre endpoint layer needs the *typed* value so
+ * it can emit the wire width that the JSON descriptor promised (4 bytes for
+ * float/int32/uint32, 2 bytes for uint16).  Keeping the kind->memory-layout
+ * mapping here means no other module needs to know how a row is stored.
+ */
+typedef struct
+{
+  param_kind_t kind;
+  float        f32;
+  int32_t      i32;
+  uint32_t     u32;
+  uint16_t     u16;
+} param_value_t;
+
+/* Read one row by entry.  Returns PARAM_RESULT_READ_ONLY if the row has no
+ * read_ptr, PARAM_RESULT_UNKNOWN for an unhandled kind. */
+param_result_t param_read_entry(const param_entry_t *entry, param_value_t *out);
+
+/* The canonical parameter table, in declaration order.  Lets the Fibre layer
+ * index a row directly instead of doing a string search per polled variable. */
+const param_entry_t *param_table_entries(uint32_t *count);
+
+/* Write one row by entry.  A thin wrapper over the same store path as
+ * param_write_value(), so bounds checks, nvm_config_apply() and the
+ * pole_pairs/cpr calibration invalidation are shared, never duplicated. */
+param_result_t param_write_entry(const param_entry_t *entry, float value);
+
 #endif /* AT32_ODRIVE_PARAM_H */

@@ -541,6 +541,61 @@ param_result_t param_write_value(const char *path, float value)
   return param_store(entry, value);
 }
 
+const param_entry_t *param_table_entries(uint32_t *count)
+{
+  if (count != NULL)
+  {
+    *count = (uint32_t)(sizeof(s_params) / sizeof(s_params[0]));
+  }
+
+  return s_params;
+}
+
+param_result_t param_read_entry(const param_entry_t *entry, param_value_t *out)
+{
+  if ((entry == NULL) || (out == NULL))
+  {
+    return PARAM_RESULT_UNKNOWN;
+  }
+
+  if (entry->read_ptr == NULL)
+  {
+    return PARAM_RESULT_READ_ONLY;
+  }
+
+  out->kind = entry->kind;
+
+  switch (entry->kind)
+  {
+    case PARAM_KIND_F32:
+      out->f32 = param_load_f32(entry->read_ptr);
+      break;
+    case PARAM_KIND_I32:
+      out->i32 = param_load_i32(entry->read_ptr);
+      break;
+    case PARAM_KIND_U32:
+      out->u32 = param_load_u32(entry->read_ptr);
+      break;
+    case PARAM_KIND_U16:
+      out->u16 = param_load_u16(entry->read_ptr);
+      break;
+    default:
+      return PARAM_RESULT_UNKNOWN;
+  }
+
+  return PARAM_RESULT_OK;
+}
+
+param_result_t param_write_entry(const param_entry_t *entry, float value)
+{
+  if (entry == NULL)
+  {
+    return PARAM_RESULT_UNKNOWN;
+  }
+
+  return param_store(entry, value);
+}
+
 param_result_t param_write(const char *path, const char *value_text)
 {
   const param_entry_t *entry;
