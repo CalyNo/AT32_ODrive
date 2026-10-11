@@ -199,9 +199,20 @@ ss / sr / sc                        保存 / 重启 / 清错误
   **未上板验证**：下面的结论来自协议级一致性测试与 Keil 编译，**不是真机联调**。
   验证工具 `tools/fibre_conformance.py`（31 项检查：字节级描述符比对、CRC 与官方
   `fibre.protocol` 及 `docs/protocol.rst` 测试向量三方核对、描述符读取握手、
-  GUI Tuning 看板 13/13 路径可解析）；漂移守卫 `cd firmware && mingw32-make check-fibre`。
+  GUI Tuning 看板的全部 13 条路径声明 / 11 条不同路径可解析）；漂移守卫
+  `cd firmware && mingw32-make check-fibre`。
   真机仍需确认 USB 枚举、WinUSB 绑定与 GUI 实际连接。
   其余上位机仍可用 ODriveArduino 等 ASCII 客户端，以及 python-can + 官方 DBC 的 CAN 客户端（见 `tools/odrive_can_smoke.py`）。
+- **已知缺口：官方 GUI 的 "Clear Errors" 按钮仍不可用。** `GUI/src/components/clearErrors.vue:20-28`
+  是往四个**属性**写 0：`axis0.error`、`axis0.motor.error`、`axis0.encoder.error`、
+  `axis0.controller.error`。后三个不在 `s_params[]` 里，`odrive_server.py` 的 `getattr`
+  会抛异常并被 `postVal` 吞掉，现象是"点了没反应"。本工程暴露的 `axis0.clear_errors`
+  是**函数端点**（`type:"function"`），而官方 GUI 除了 `save_configuration` 之外不调用
+  任何函数端点（唯一调用点 `CtrlFunction.vue:31`），所以**它不会被宿主触发**——保留它
+  只是为了与 ODrive 接口对齐，不代表 GUI 具备清错误能力。
+  要真正修好按钮，需把 `axis0.motor.error`/`axis0.encoder.error`/`axis0.controller.error`
+  加入 `s_params[]` 并重新生成描述符（`axis.h:53-64` 已有对应的
+  `AXIS_ERROR_MASK_MOTOR/ENCODER/CONTROLLER` 掩码可复用）。
 - 控制器量纲做了简化，`input_torque` 近似为 q 轴电流，没有除以力矩常数 `Kt`。
 - 电机 R/L、编码器方向/偏置已实现；力矩常数辨识、增益调度、抗齿槽、无感 FOC、弱磁、MTPA 未实现。
 - 没有制动电阻控制，因为本板硬件没有制动斩波器。

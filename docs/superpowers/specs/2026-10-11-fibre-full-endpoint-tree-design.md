@@ -40,6 +40,14 @@ Fibre 0.1）能够真正使用本板固件：不仅能**发现**设备，还能�
 
 - 由 `firmware/Src/param.c` 的 `s_params[]` 生成 Fibre 端点树（约 70 个属性），纳入构建与文档。
 - 新增函数端点 `save_configuration`（GUI Tuning 看板唯一实际点击调用的函数）与 `axis0.clear_errors`。
+
+  > **事后更正（2026-10-11，整体评审发现）**：本节当初断言 GUI 用 `axis0.clear_errors` 清错误，
+  > 这是**错的**。`GUI/src/components/clearErrors.vue:20-28` 实际是往四个**属性**写 0
+  > （`axis0.error`、`axis0.motor.error`、`axis0.encoder.error`、`axis0.controller.error`），
+  > 后三个不在 `s_params[]` 里；而全 GUI 唯一调用函数端点的地方是 `CtrlFunction.vue:31`，
+  > 只用于 `save_configuration`。所以 `axis0.clear_errors` 这个函数端点**没有任何宿主会触发**，
+  > 保留它只是为了与 ODrive 接口对齐。**GUI 的 Clear Errors 按钮仍未修好**——见
+  > `docs/odrive_mapping.md` §5 的"已知缺口"，以及 §4.5 的同名更正。
 - 补齐 spec 缺口：endpoint 0 的 `offset == 0xFFFFFFFF` 返回 `json_version_id`。
 - 把一致性脚本固化进仓库，作为不需要工具链的回归测试。
 - 同步 `docs/` 与 `AGENTS.md`。
@@ -188,6 +196,12 @@ param_result_t param_write_entry(const param_entry_t *entry, float value);
 - 函数端点：`save_configuration` → `param_save_configuration()`；
   `axis0.clear_errors` → 现有清错误路径（`param.c` 里 `axis0.clear_errors` 目前是只写 ASCII 属性，
   `read_ptr == NULL`，在 Fibre 里改成函数端点，所以它出现在函数表而不是属性表）。
+
+  > **事后更正**：如 §3 开头所述，官方 GUI **不调用**这个函数端点（它按属性写来清错误），
+  > 所以这一行实现的是"接口对齐"而不是"GUI 功能"。要让 Clear Errors 按钮真正可用，
+  > 需要把 `axis0.motor.error`/`axis0.encoder.error`/`axis0.controller.error` 三个属性补进
+  > `s_params[]` 并重新生成描述符；`axis.h:53-64` 已有可复用的
+  > `AXIS_ERROR_MASK_MOTOR/ENCODER/CONTROLLER` 掩码。本次**未做**。
 - 生成表里的哨兵 `FIBRE_EP_NOT_PARAM`（身份端点，见 4.3.1）交给手写的 `fibre_identity_read()`。
 - 未知 id、非法长度一律返回 0 字节（保持现有语义）。
 
