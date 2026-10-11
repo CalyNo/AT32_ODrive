@@ -1004,11 +1004,27 @@ Expected: 无输出、退出码 0。
 
 - [ ] **Step 4: 在一致性测试里加断言**
 
-在 `tools/fibre_conformance.py` 里补一条：模拟 `offset = 0xFFFFFFFF` 的请求，断言设备端口返回
-4 字节，且其值等于 `(json_crc << 16) | crc16(json_crc, json)`。
+三件事，缺一不可：
+
+**(a) `FirmwareSim` 必须同步 Step 1 的行为改变。** 现在它按
+`if payload_length > 0` 才记录写（照抄了旧的 `fibre_server.c`）。Step 1 改成**无条件**派发之后，
+sim 也必须无条件调用端点，并区分：载荷长度等于 codec 宽度 → 属性写；载荷长度 0 → 函数调用。
+
+**(b) 补 `0xFFFFFFFF` 的断言。** 模拟 `offset = 0xFFFFFFFF` 的请求，断言设备端口返回 4 字节，
+且其值等于 `(json_crc << 16) | crc16(json_crc, json)`。
+
+**(c) 补函数端点的写路径覆盖（这是 Step 1 修复唯一的测试证据）。**
+端点 id 必须**从描述符树里按名字解析**，不得写死数字。断言：
+- 零参数函数端点（`save_configuration`）以**长度为 0** 的载荷调用时**确实被派发**了，
+  而不是被静默跳过——这正是 Step 1 修的 bug，没有这条断言就没法证明它修好了；
+- 同一次调用**不产生**多余写记录。
+
+> 背景：spec 评审查出原测试只覆盖了 endpoint 0 与"错误 CRC 被拒"，非零端点的正向往返完全没测，
+> 导致 Step 1 的修复没有 conformance 覆盖。属性读/写宽度的正向断言已在 Task 1 的修订里补上
+> （见 Task 1 Step 1 第 3 条），函数端点这一条必须在 Task 5 补，因为它的行为在 Task 5 才改变。
 
 Run: `python tools/fibre_conformance.py`
-Expected: 全 PASS，包括新增的这一条。
+Expected: 全 PASS，包括 (b)、(c) 新增的断言。
 
 - [ ] **Step 5: 提交**
 
