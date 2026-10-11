@@ -111,10 +111,15 @@ ROOT = Path(__file__).resolve().parent.parent
 ODRIVE = Path(r"D:\1-myproject\AT32_ODrive\ODrive")
 GENERATED_H = ROOT / "firmware" / "Inc" / "fibre_endpoints_generated.h"
 
-sys.path.insert(0, str(ROOT / "tools"))
-from gen_fibre_endpoints import (  # noqa: E402  (single source of parsing)
-    parse_param_rows, build_descriptor, IDENTITY_ENDPOINTS, FUNCTION_ENDPOINTS,
-)
+def load_generator():
+    """The generator itself lands in Task 2.  Until then this test must fail with
+    a readable message rather than an import traceback."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    try:
+        import gen_fibre_endpoints as gen
+    except ImportError as exc:
+        raise SystemExit("FAIL: tools/gen_fibre_endpoints.py not available yet (%s)" % exc)
+    return gen
 
 RESULTS = []
 
@@ -1055,12 +1060,36 @@ git commit -m "build: 增加 gen-fibre / check-fibre 目标"
 
 - [ ] **Step 1: 跑 Keil 批处理编译**
 
+**已实测通过的调用方式**（2026-10-11 在需求机上验证；注意三点：必须用**绝对路径**、日志名用
+`keil_build.log` 才能命中 `.gitignore`、不要传 `-j0`）：
+
 ```powershell
-& "D:\Keil\UV4\UV4.exe" -b "firmware\AT32_ODrive.uvprojx" -j0 -o "firmware\keil_build.log"
-Get-Content "firmware\keil_build.log" -Tail 40
+$repo = "D:\1-myproject\AT32_ODrive\AT32_ODrive"
+$proj = Join-Path $repo "firmware\AT32_ODrive.uvprojx"
+$log  = Join-Path $repo "firmware\keil_build.log"
+$p = Start-Process -FilePath "D:\Keil\UV4\UV4.exe" `
+     -ArgumentList @('-b', $proj, '-o', $log) -Wait -PassThru -NoNewWindow
+$p.ExitCode
+Get-Content $log -Tail 60
 ```
 
-Expected: 日志里 `0 Error(s), 0 Warning(s)`。UV4 的 `-b` 用日志文件报告，退出码不可靠，**以日志为准**。
+Expected（基线实测输出，改动后仍须满足）：
+
+```
+*** Using Compiler 'V5.06 update 7 (build 960)', folder: 'D:\keil\ARM\ARMCC\Bin'
+linking...
+Program Size: Code=<...> RO-data=<...> RW-data=<...> ZI-data=<...>
+".\build_keil\objects\AT32_ODrive.axf" - 0 Error(s), 0 Warning(s).
+```
+
+**基线（未改动的 commit 8d1b092）实测值**：`Code=57944 RO-data=7204 RW-data=460 ZI-data=5268`，
+51 个编译单元，耗时约 3 秒，产物 `build_keil/objects/AT32_ODrive.axf`(726KB) + `.hex`(184KB)。
+
+**已知环境坑（都踩过了，不要再重复）**：
+1. **必须提权**：UV4 要写工作区外的 `D:\Keil` 与用户配置目录；在受限沙箱下会**静默失败**（不写日志、退出码 2），极易误判成工程有问题。
+2. **必须在工作区外的写权限下用绝对路径调用**；相对路径的 `-o` 不会在预期位置产生日志。
+3. 首次运行时 µVision 会把工程文件**规范化成 AC5**（新增 `<pArmCC>`、移除 `<RvdsCdeCp>`/`<nBranchProt>`、`<ClangAsOpt>4` → `<uClangAs>0`、删除 `<LayerInfo>`）。若之前因 `TOOLS.INI` 里失效的 `DEFAULT_ARMCC_VERSION_CM4="V5.06 update 3"` 而 abort，**再跑一次即可成功**——不需要改 `TOOLS.INI`，也不需要去 GUI 里手动选编译器。
+4. 若日志里出现 `default ARM-Compiler version ... is not available` + `Build aborted`，就是第 3 条那个一次性规范化还没完成，重跑即可。
 
 - [ ] **Step 2: 修复任何 error/warning**
 
