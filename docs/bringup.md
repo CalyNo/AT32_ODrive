@@ -379,11 +379,24 @@ r usb.tx_dropped    TX 环形缓冲溢出丢字节数（正常应长期为 0）
 ```text
 tools/odrive_ascii_smoke.py    # pyserial：校验 ASCII 响应语义（只回数值、写成功静默等）
 tools/odrive_can_smoke.py      # python-can + cantools：用官方 DBC 解码心跳/编码器/母线
+tools/odrive_fibre_smoke.py    # 官方 odrive/fibre 主机栈：读/写/函数端点/LED/复位原因
 tools/odrive_gui_backend.py    # 启动官方 GUI 的 Python 后端（见 §13）
 tools/odrive_gui_probe.js      # 用官方 GUI 自己的 socket.io 客户端无头验证这条链路
 ```
 
-前两者都是 bring-up 辅助，未在本板上运行过（见 `docs/assumptions.md`）；后两者已在真机跑通。
+`odrive_fibre_smoke.py` 走的就是官方 GUI 用的那条 USB 厂商接口通路，所以它 PASS 才
+说明 GUI 的传输层是好的，而不只是"收到了几个字节"。它的第 [3] 节会**调
+`clear_errors()`，也就是会清掉轴错误并回到 IDLE**；只想看故障现场就加 `--read-only`。
+它不会进入闭环、不会启动校准、不会调用 `save_configuration()`。
+
+```text
+python tools/odrive_fibre_smoke.py                 # 15 项全跑
+python tools/odrive_fibre_smoke.py --read-only     # 只看，不动
+python tools/odrive_fibre_smoke.py --tools <ODrive 克隆>/tools
+```
+
+ASCII / CAN 两个脚本是 bring-up 辅助，未在本板上运行过（见 `docs/assumptions.md`）；
+Fibre / GUI 三个已在真机跑通。
 
 ## 12. 枚举宽度陷阱（ARM Compiler 5）
 
