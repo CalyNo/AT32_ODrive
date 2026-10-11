@@ -101,8 +101,15 @@ def main() -> None:
         r"<Device>-AT32F435ZMT7</Device>": "<Device>-AT32F435CGT7</Device>",
         r"<PackID>ArteryTek\.AT32F435_437_DFP\.2\.2\.5</PackID>":
             "<PackID>ArteryTek.AT32F435_437_DFP.2.2.8</PackID>",
+        # IROM must end at 0x080FE000: 0x080FE000..0x080FFFFF is the reserved
+        # configuration sector (see Src/nvm_config.c).  uVision copies this
+        # string into the target's "Read/Only Memory Areas" whenever the project
+        # is opened or built, so a 0x100000 here silently re-extends the linker's
+        # ROM region over the NVM area -- and that is exactly the drift this line
+        # used to cause: the committed .uvprojx kept reverting to 0x100000 even
+        # though tools/keil_template.uvprojx says 0xfe000.  Keep the two in step.
         r"<Cpu>[^<]*</Cpu>":
-            '<Cpu>IRAM(0x20000000,0x60000) IROM(0x08000000,0x100000) '
+            '<Cpu>IRAM(0x20000000,0x60000) IROM(0x08000000,0xfe000) '
             'CPUTYPE("Cortex-M4") FPU2 CLOCK(8000000) ELITTLE</Cpu>',
         r"<OutputDirectory>\.\\objects\\</OutputDirectory>":
             "<OutputDirectory>.\\build_keil\\objects\\</OutputDirectory>",
