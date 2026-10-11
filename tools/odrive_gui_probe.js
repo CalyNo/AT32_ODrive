@@ -48,6 +48,8 @@ const findings = {};
 let gotTree = false;
 let asked = 0;
 let done = false;
+let treeRetry = null;
+const startedAt = Date.now();
 
 function finish(code, note) {
   if (done) return;
@@ -71,28 +73,37 @@ socket.on('connect', () => {
   console.log('connected to ' + serverUrl + ' (id ' + socket.id + ')');
   console.log('asking the backend to look for ODrives...');
   socket.emit('findODrives', {});
+  /* Do not gate on the odrives-status event: the backend only emits it on a
+   * fresh discovery or on a disconnect, so a device it already knows about
+   * (or one that vanished while a stale handle survived) produces no event at
+   * all and waiting for one just times out.  Poll getODrives instead. */
+  askForTree();
+  treeRetry = setInterval(askForTree, 3000);
 });
+
+function askForTree() {
+  const now = Date.now();
+  if (gotTree || now - startedAt > 21000) {
+    if (treeRetry) clearInterval(treeRetry);
+    return;
+  }
+  socket.emit('getODrives', {});
+}
 
 socket.on('odrives-status', (payload) => {
   console.log('odrives-status: ' + payload);
-  const status = JSON.parse(payload);
-  const keys = Object.keys(status);
-  if (keys.length === 0) return;
-  if (!gotTree) {
-    gotTree = true;
-    console.log('device key: ' + keys[0] + ' -> requesting the full property tree');
-    socket.emit('getODrives', {});
-  }
 });
 
 socket.on('odrives', (payload) => {
   const tree = JSON.parse(payload);
   const keys = Object.keys(tree);
-  console.log('property tree received for: ' + JSON.stringify(keys));
   if (keys.length === 0) {
-    finish(1, 'the backend discovered no ODrives; is the board plugged in?');
+    console.log('backend reports no ODrives yet (retrying...)');
     return;
   }
+  gotTree = true;
+  if (treeRetry) clearInterval(treeRetry);
+  console.log('property tree received for: ' + JSON.stringify(keys));
   console.log('top-level members: ' + Object.keys(tree[keys[0]]).join(', '));
   for (const p of INTERESTING) {
     socket.emit('getProperty', { path: keys[0] + '.' + p });
@@ -113,4 +124,11 @@ socket.on('connect_error', (e) => {
   finish(1, 'connect_error: ' + e.message);
 });
 
-setTimeout(() => finish(1, 'timed out waiting for the backend/board'), 45000);
+setTimeout(() => {
+  finish(1, gotTree
+    ? 'the backend still lists an ODrive but answered none of the property '
+      + 'reads -- that is a stale handle, i.e. the device re-enumerated '
+      + '(flashed/reset) and the backend never noticed. Restart the backend.'
+    : 'the backend never produced a property tree; the board is not being '
+      + 'discovered at all (check USB enumeration and power).');
+}, 45000);

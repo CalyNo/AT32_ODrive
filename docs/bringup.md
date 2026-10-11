@@ -414,6 +414,9 @@ typedef char axis_state_t_must_be_32_bits[(sizeof(axis_state_t) == 4) ? 1 : -1];
 宽度再被改回去就直接编译失败。副作用：`axis_t` 里 3 个状态字段各由 1 字节变 4 字节，
 `ZI-data` 5268 → 5276（+8），`Code` 58972。
 
+**真机确认**：烧录这一版之后，`axis0.requested_state` 读回 **1**（此前 257），
+读矩阵 19/19、写/函数端点/LED 诊断矩阵 14/14 全部通过。
+
 **同类风险**：`axis_error_t` 的最高位是 `1u << 12`，在 AC5 下是 **2 字节**。目前没有任何
 参数行指向 `axis_error_t` **变量**（`axis0.error` 指向的是 `uint32_t error` 字段，三个
 `*.error` 组件行是 `on_read` 计算值、`read_ptr` 为 `NULL`），所以没有实际错配。
@@ -454,4 +457,27 @@ node tools/odrive_gui_probe.js
 
 它加载 GUI 自带的 `socket.io-client`（浏览器里跑的就是同一份），走
 socket.io → `odrive_server.py` → pyfibre → USB → 固件 的完整链路。
+
+**地址栏变绿 ≠ 找到设备。** 那个绿色只表示浏览器连上了后端服务：
+`GUI/src/views/Start.vue` 把它绑在 `$store.state.serverConnected` 上。设备有没有找到
+是另一回事，不体现在这个颜色里 —— 判断设备要看设备列表/属性是否真的有值。
+
+**烧录或复位之后必须重启后端。** 板子重新枚举时，`odrive_server.py` 手里的设备句柄会
+变成悬空的，而它的 discovery 循环**既不会再报一次"找到设备"，也不会报 "lost odrive"**，
+于是表现成：地址栏还是绿的、但设备列表和属性全是空的。`tools/odrive_gui_probe.js`
+在这个状态下会打印
+`the backend still lists an ODrive but answered none of the property reads`。
+处理办法就是重启后端。
+
+怀疑是板子本身的问题时，先用 `pnputil /enum-devices /connected` 确认 USB 侧其实是好的，
+本板正常的三个节点是：
+
+| Instance ID | 作用 | 驱动 |
+| --- | --- | --- |
+| `USB\VID_1209&PID_0D32&MI_00` | USB CDC → COM6 | `usbser.inf`（Class: Ports） |
+| `USB\VID_1209&PID_0D32` | 复合设备 | `usb.inf` |
+| `USB\VID_1209&PID_0D32&MI_02` | Fibre 厂商接口（libfibre 走这个） | WinUSB（Class: USBDevice） |
+
+三者都应为 `Status: Started`。注意 `Get-PnpDevice` 在受限环境下会**静默返回空列表**
+（`(Get-PnpDevice -PresentOnly).Count` 得到 0），据此判断"设备不存在"会误判，用 `pnputil`。
 
