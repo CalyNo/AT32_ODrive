@@ -37,11 +37,18 @@ against the genuine ODrive host implementation; the packet server is a
 line-by-line port of firmware/Src/fibre_server.c.  Nothing here runs on a board,
 so USB enumeration and timing are out of scope.
 
-NOT COVERED HERE, BY DESIGN: function-endpoint dispatch (both the zero-argument
-call path and the "always dispatch, even an empty payload" fix in
-fibre_server.c:111-114) is added together with the server fix in Task 5.  The
-simulator below still models the pre-fix `payload_length > 0` gate, so it does
-not pretend to cover zero-length function calls.
+The simulator below is a faithful port of the CURRENT fibre_server.c: it offers
+the payload to the endpoint unconditionally (the pre-Task-5 `payload_length > 0`
+gate silently skipped every zero-argument function call, so save_configuration()
+never ran) and it implements the endpoint-0 0xFFFFFFFF version-id sentinel.
+
+What the port still *models* rather than verifies is the decision inside
+fibre_endpoint_write() (fibre_endpoints.c): the simulator derives the
+property/function/identity kind and the codec width from the descriptor's own
+declaration -- the same declarations the generated s_fibre_ep_kind[] and
+s_fibre_ep_width[] tables are built from -- so it is a model of that layer, not
+evidence about the C in it.  Only the packet framing, the unconditional dispatch
+and the sentinel are properties of fibre_server.c itself.
 """
 
 import json
@@ -204,20 +211,27 @@ def load_official_protocol():
 class FirmwareSim:
     """Port of the AT32 firmware's Fibre packet server."""
 
-    def __init__(self, json_bytes, scalar_reads, property_widths=None):
+    def __init__(self, json_bytes, scalar_reads, property_widths=None, endpoint_kinds=None):
         self.json = json_bytes
         self.json_crc = firmware_crc16(1, json_bytes)   # fibre_server_init(): crc16_update(1u, ...)
         self.scalar_reads = scalar_reads                # endpoint_id -> bytes it would return
-        self.writes = []                                # (endpoint_id, payload) that reached fibre_endpoint_write()
+        self.writes = []                                # (endpoint_id, payload) offered for a property
         self.property_writes = []                       # as above, but only payloads of the declared width
+        self.calls = []                                 # endpoint_ids dispatched as zero-argument calls
         self.sent = []                                  # responses actually emitted
         # Declared codec width per endpoint, taken from the SAME descriptor the
         # host builds its tree from.  Still a model of the Task 4 dispatcher, not
         # a verification of it (see property_writes below).
         self.property_widths = property_widths or {}
+        # 'property' | 'function' | 'identity' per endpoint, also from the
+        # descriptor.  The generated s_fibre_ep_kind[] draws the same
+        # distinction, and without it a zero-length payload cannot be told apart
+        # from an empty property write.  Unknown ids fall back to 'property',
+        # which is what the pre-Task-5 server did for every payload.
+        self.endpoint_kinds = endpoint_kinds or {}
 
     def process_packet(self, packet):
-        """Returns the response bytes, or None (fibre_server.c:42-136)."""
+        """Returns the response bytes, or None (fibre_server.c:42-174)."""
         if packet is None or len(packet) < FIBRE_MIN_REQUEST_LENGTH:
             return None                                  # line 54-57
 
@@ -243,6 +257,16 @@ class FirmwareSim:
             if payload_length < 4:
                 return None                                # line 85-88
             offset = struct.unpack_from("<I", payload, 0)[0]
+            if offset == 0xFFFFFFFF:
+                # Spec-defined sentinel (fibre_server.c:92-121): the descriptor's
+                # 32-bit version id instead of a slice of the descriptor, and only
+                # when the client asked for at least those 4 bytes.
+                if output_length >= 4:
+                    version_id = ((self.json_crc & 0xFFFF) << 16) | \
+                                 firmware_crc16(self.json_crc & 0xFFFF, self.json)
+                    response[2:6] = struct.pack("<I", version_id & 0xFFFFFFFF)
+                    response_length = 6
+                return self._maybe_send(endpoint_field, seq_no, response, response_length)
             if offset < len(self.json) and output_length > 0:
                 available = len(self.json) - offset
                 copy_length = min(available, output_length, FIBRE_MAX_RESPONSE_DATA)
@@ -251,16 +275,33 @@ class FirmwareSim:
                 return self._maybe_send(endpoint_field, seq_no, response, response_length)
             return self._maybe_send(endpoint_field, seq_no, response, response_length)
         else:
-            # Pre-Task-5 shape: fibre_endpoint_write() is only called when the
-            # payload is non-empty (fibre_server.c:111-114).
-            if payload_length > 0:
-                self.writes.append((endpoint_id, bytes(payload)))
+            # fibre_server.c:142-152 -- the payload is offered UNCONDITIONALLY,
+            # empty payloads included.  Gating this on `payload_length > 0` (the
+            # pre-Task-5 code) is the defect that made a zero-argument function
+            # endpoint a silent no-op; the endpoint layer, not the server, decides
+            # whether a length is a write or a call.
+            kind = self.endpoint_kinds.get(endpoint_id, "property")
+
+            if kind == "function":
+                # Zero-argument function: called with an empty payload, returns no
+                # value.  Kept in its own list -- `writes` has always meant the
+                # property payloads the server handed over, and a call must not be
+                # mistaken for one.
+                if payload_length == 0:
+                    self.calls.append(endpoint_id)
+            elif kind == "identity":
+                pass                                       # read-only: never written
+            else:
                 # A property is written only when the payload carries exactly its
-                # codec width (design §4.5).  This mirrors the Task 4 dispatcher
-                # so that width-sensitive assertions have something faithful to
-                # compare against; the dispatcher itself is verified in Task 4.
+                # declared codec width; anything else is neither a write nor a
+                # call.  `writes` records what the server offered (unchanged since
+                # before Task 5), `property_writes` only what passed the width
+                # rule -- see the width NOTE printed below.
+                if payload_length > 0:
+                    self.writes.append((endpoint_id, bytes(payload)))
                 if payload_length == self.property_widths.get(endpoint_id):
                     self.property_writes.append((endpoint_id, bytes(payload)))
+
             if output_length > 0:
                 max_length = min(output_length, FIBRE_MAX_RESPONSE_DATA)
                 data = self.scalar_reads.get(endpoint_id, b"")   # default: 0 consumed
@@ -270,7 +311,7 @@ class FirmwareSim:
             return self._maybe_send(endpoint_field, seq_no, response, response_length)
 
     def _maybe_send(self, endpoint_field, seq_no, response, response_length):
-        if endpoint_field & 0x8000:                        # line 131-135
+        if endpoint_field & 0x8000:                        # line 169-173
             struct.pack_into("<H", response, 0, seq_no | 0x8000)
             out = bytes(response[:response_length])
             self.sent.append(out)
@@ -405,6 +446,25 @@ def first_property(by_name, want_writable=None, want_readable=None, want_codec=N
 
 def codec_width_of(entry):
     return CODEC_WIDTH.get(entry.get("type"))
+
+
+def find_function(by_name, name):
+    """Resolve a function endpoint by NAME, never by a literal id.
+
+    Generated ids follow s_params[] table order, so a hard-coded number would
+    silently address a different endpoint after any param.c edit.  Returns the
+    (path, entry) pair, or (None, None) when the tree has no such function.
+    """
+    exact = by_name.get(name)
+    if exact is not None and exact.get("type") == "function" and "id" in exact:
+        return name, exact
+
+    matches = [(path, entry) for path, entry in by_name.items()
+               if entry.get("type") == "function" and "id" in entry
+               and path.split(".")[-1] == name]
+    if len(matches) == 1:
+        return matches[0]
+    return None, None
 
 
 def main():
@@ -580,7 +640,26 @@ def main():
     property_widths = {entry["id"]: codec_width_of(entry) for entry in by_name.values()
                        if "id" in entry and entry.get("type") not in (None, "object", "function")}
 
-    device = FirmwareSim(committed, scalar_reads={}, property_widths=property_widths)
+    # Kind per endpoint, from the descriptor: a "function" member declares no
+    # codec, the board identity block is the set of root members that have no
+    # s_params[] row, everything else is a table-backed property.  This is what
+    # makes the unconditional dispatch decidable: length 0 means "call" only for
+    # a function endpoint, and only an exact codec-width payload is a write.
+    identity_ids = {entry["id"] for entry in top
+                    if entry.get("name") in IDENTITY_ENDPOINTS and "id" in entry}
+    endpoint_kinds = {}
+    for entry in iter_members(top):
+        if "id" not in entry:
+            continue
+        if entry.get("type") == "function":
+            endpoint_kinds[entry["id"]] = "function"
+        elif entry["id"] in identity_ids:
+            endpoint_kinds[entry["id"]] = "identity"
+        else:
+            endpoint_kinds[entry["id"]] = "property"
+
+    device = FirmwareSim(committed, scalar_reads={}, property_widths=property_widths,
+                         endpoint_kinds=endpoint_kinds)
     client = OfficialClient(device)
 
     got = client.remote_endpoint_read_buffer(0)
@@ -606,6 +685,24 @@ def main():
     bogus.interface_definition_crc = (device.json_crc ^ 0x0001) & 0xFFFF
     check("request with a mismatched json_crc is silently dropped",
           bogus.remote_endpoint_operation(1, b"", True, 4) is None)
+
+    # Spec parity with the official endpoint0_handler(): offset 0xFFFFFFFF asks
+    # for the descriptor's version id, not for a slice of the descriptor.  A host
+    # that gets a slice (or an empty answer) here cannot tell the firmware's
+    # object model apart from the one it read, which is exactly what this id
+    # exists to decide.
+    sentinel_device = FirmwareSim(committed, scalar_reads={})
+    sentinel_client = OfficialClient(sentinel_device)
+    sentinel_client.interface_definition_crc = sentinel_device.json_crc
+    version_id = ((sentinel_device.json_crc & 0xFFFF) << 16) | \
+                 firmware_crc16(sentinel_device.json_crc & 0xFFFF, committed)
+    sentinel_answer = sentinel_client.remote_endpoint_operation(
+        0, struct.pack("<I", 0xFFFFFFFF), True, 4)
+    check("offset 0xFFFFFFFF returns the 4-byte json version id",
+          sentinel_answer == struct.pack("<I", version_id),
+          "got %r (%s bytes), expected %r (0x%08X)"
+          % (sentinel_answer, len(sentinel_answer) if sentinel_answer is not None else None,
+             struct.pack("<I", version_id), version_id))
 
     # ------------------------------------------------------------------
     print()
@@ -667,11 +764,40 @@ def main():
               % (len(short_payload), width, short_device.property_writes))
 
         # What this section does and does not prove, so nobody over-trusts it:
-        # the wire traffic is model-independent (fibre_server.c:111-114), but the
+        # the wire traffic is model-independent (fibre_server.c:142-152), but the
         # width acceptance rule lives in fibre_endpoint_write() and is modelled
         # here from the descriptor's own declaration -- it is verified in Task 4.
         print("        NOTE: width acceptance is modelled from the descriptor "
               "(Task 4 verifies the dispatcher)")
+
+    # The zero-argument function path.  This is the only evidence that the
+    # pre-Task-5 `payload_length > 0` gate is gone: with that gate in place a
+    # function call (always an EMPTY payload) never reached the endpoint layer at
+    # all, so save_configuration() was a silent no-op, and every assertion below
+    # fails if the gate comes back.  The endpoint id is resolved by NAME -- ids
+    # follow s_params[] table order, so a literal would point elsewhere after a
+    # param.c edit.
+    function_path, function_entry = find_function(by_name, "save_configuration")
+    if function_path is None:
+        check("the save_configuration function endpoint exists in the tree", False,
+              "no function endpoint named save_configuration")
+    else:
+        call_id = function_entry["id"]
+        calling_device = FirmwareSim(committed, scalar_reads={},
+                                     property_widths=property_widths,
+                                     endpoint_kinds=endpoint_kinds)
+        caller = OfficialClient(calling_device)
+        caller.interface_definition_crc = calling_device.json_crc
+
+        caller.remote_endpoint_operation(call_id, b"", True, 0)
+        check("zero-argument %s (id %d) is dispatched, not silently skipped"
+              % (function_path, call_id),
+              calling_device.calls == [call_id],
+              "dispatched calls %r, expected [%d]" % (calling_device.calls, call_id))
+        check("calling %s does not write anything" % function_path,
+              calling_device.writes == [] and calling_device.property_writes == [],
+              "writes %r, property_writes %r"
+              % (calling_device.writes, calling_device.property_writes))
 
     # ------------------------------------------------------------------
     print()

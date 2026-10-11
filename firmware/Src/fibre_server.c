@@ -88,7 +88,38 @@ void fibre_server_process_packet(const uint8_t *packet, uint16_t length)
     }
 
     offset = read_le32(payload);
-    if ((offset < json_length) && (output_length > 0u))
+
+    /*
+     * Spec-defined sentinel: asking for offset 0xFFFFFFFF returns the
+     * descriptor's 32-bit version id instead of a slice of the descriptor.
+     * This mirrors the official endpoint0_handler(), and the id is the same
+     * value the host derives from the descriptor it read:
+     *   (json_crc << 16) | crc16_update(json_crc, json, json_length)
+     * Emitted little-endian, and only when the client asked for at least those
+     * four bytes -- otherwise the response stays empty like any other
+     * unsatisfiable request.
+     */
+    if (offset == 0xFFFFFFFFu)
+    {
+      uint32_t json_crc = (uint32_t)s_json_crc;
+      uint32_t version_id = (json_crc << 16) |
+                            (uint32_t)crc16_update((uint16_t)json_crc,
+                                                   (const uint8_t *)json,
+                                                   json_length);
+      uint16_t written = 0u;
+
+      if (output_length >= 4u)
+      {
+        s_tx_packet[2] = (uint8_t)(version_id & 0xFFu);
+        s_tx_packet[3] = (uint8_t)((version_id >> 8) & 0xFFu);
+        s_tx_packet[4] = (uint8_t)((version_id >> 16) & 0xFFu);
+        s_tx_packet[5] = (uint8_t)((version_id >> 24) & 0xFFu);
+        written = 4u;
+      }
+
+      response_length = (uint16_t)(2u + written);
+    }
+    else if ((offset < json_length) && (output_length > 0u))
     {
       uint32_t available = json_length - offset;
       uint32_t copy_length = available;
@@ -108,10 +139,17 @@ void fibre_server_process_packet(const uint8_t *packet, uint16_t length)
   }
   else
   {
-    if (payload_length > 0u)
-    {
-      (void)fibre_endpoint_write(endpoint_id, payload, payload_length);
-    }
+    /*
+     * Always offer the payload to the endpoint, even when it is empty: a
+     * zero-argument function endpoint is called with a zero-length payload, so
+     * gating this on payload_length > 0 turned save_configuration() into a
+     * silent no-op -- the GUI's "save configuration" button did nothing and
+     * reported no error.  The endpoint dispatcher decides what the length
+     * means: an exact codec-width payload is a property write, a zero-length
+     * payload is a function call, anything else is neither.  An empty payload
+     * is therefore never interpreted as "write zero".
+     */
+    (void)fibre_endpoint_write(endpoint_id, payload, payload_length);
 
     if (output_length > 0u)
     {
